@@ -1,0 +1,24 @@
+name: revani
+description: "A client-side API for interacting with the Revani server. It simplifies making requests to the server's services and handling responses."
+version: 1.0.0
+homepage: https://github.com/JeaFriday/Revani
+repository: https://github.com/JeaFriday/Revani_dart
+issue_tracker: https://github.com/JeaFriday/Revani_dart/issues
+
+environment:
+  sdk: '>=3.10.4 <4.0.0'
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.6.0
+  web_socket_channel: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# The following section is specific to Flutter packages.
+flutter:
