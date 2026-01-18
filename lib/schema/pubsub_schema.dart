@@ -1,3 +1,11 @@
+/*
+ * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
+ * * This project is part of Revani
+ * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+ * See the LICENSE file in the project root for full license information.
+ * * For commercial licensing, please contact: JeaFriday
+ */
+
 import 'package:revani/core/pubsub_engine.dart';
 import 'package:revani/model/print.dart';
 import 'package:revani/schema/data_schema.dart';
@@ -20,7 +28,10 @@ class PubSubSchema {
   ) async {
     final pId = await _projectSchema.existProject(accountID, projectName);
     if (pId == null) {
-      return printGenerator(error: "Project not found", status: StatusCodes.notFound);
+      return printGenerator(
+        error: "Project not found",
+        status: StatusCodes.notFound,
+      );
     }
 
     final globalTopic = "${pId}_$topic";
@@ -47,7 +58,10 @@ class PubSubSchema {
   ) async {
     final pId = await _projectSchema.existProject(accountID, projectName);
     if (pId == null) {
-      return printGenerator(error: "Project not found", status: StatusCodes.notFound);
+      return printGenerator(
+        error: "Project not found",
+        status: StatusCodes.notFound,
+      );
     }
 
     final globalTopic = "${pId}_$topic";

@@ -1,5 +1,9 @@
 <?php
-
+/**
+ * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
+ * * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+ * Project: Revani
+ */
 class RevaniClient {
     private $host;
     private $port;

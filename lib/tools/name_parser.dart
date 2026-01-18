@@ -1,3 +1,10 @@
+/*
+ * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
+ * * This project is part of Revani
+ * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+ * See the LICENSE file in the project root for full license information.
+ * * For commercial licensing, please contact: JeaFriday
+ */
 
 import 'dart:convert';
 
@@ -43,7 +50,8 @@ class RoomParser {
       return null;
     }
   }
-    bool? isOwner(String encodedName) {
+
+  bool? isOwner(String encodedName) {
     if (encodedName.isEmpty) {
       return null;
     }
@@ -53,11 +61,12 @@ class RoomParser {
 
       if (decoded is Map<String, dynamic>) {
         final targetProjectName = decoded["projectName"];
-         final targetAccountID = decoded["accountID"];
+        final targetAccountID = decoded["accountID"];
         if (targetProjectName is String && targetAccountID is String) {
-          if (targetProjectName == _projectName && targetAccountID == _accountID) {
+          if (targetProjectName == _projectName &&
+              targetAccountID == _accountID) {
             return true;
-          }else{
+          } else {
             return false;
           }
         }

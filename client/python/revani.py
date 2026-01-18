@@ -1,3 +1,9 @@
+# 
+# Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
+# 
+# Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+# Project: Revani
+#
 import asyncio
 import json
 import struct
