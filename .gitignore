@@ -17,7 +17,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 test.py
-cert_gen.py
 project_indexer.py
 full_project_index.txt
 *.zip
