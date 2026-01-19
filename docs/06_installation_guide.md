@@ -1,116 +1,78 @@
 # 🛠️ Installation and Server Setup Guide
 
-This guide contains all the necessary steps to launch Revani from scratch on a clean Ubuntu server.
+Revani is designed to be deployed with zero friction. This guide utilizes an automated installer to configure the environment, security, and dependencies on a clean Ubuntu/Debian server.
 
-## 1. System Requirements and Updates
-First, let's update the core operating system tools and package repositories:
+## 🚀 One-Step Automated Installation
+
+The most reliable way to install Revani is via the official installation script. This script automatically handles:
+* System package updates.
+* **Dart SDK** and **Git** installation.
+* Cloning the Revani repository.
+* Configuring **SSL Certificates**.
+* Setting up your `.env` storage password.
+
+Run the following command on your server:
 
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install git curl unzip build-essential python3 python3-pip -y
+wget -qO install.sh [https://raw.githubusercontent.com/JeaFrid/Revani/main/server/install.sh](https://raw.githubusercontent.com/JeaFrid/Revani/main/server/install.sh) && bash install.sh
 ```
 
-## 2. Dart SDK Installation
-Revani's engine is written in Dart. Let's perform the installation using the official Google repositories:
+---
+
+## 👨‍🍳 Managing the Bakery (Control Panel)
+
+Once the installation is complete, you don't need to run manual `dart` commands for every task. We have provided a management suite to handle the server lifecycle.
+
+### Entering the Management Console
+Navigate to the project folder and start the runner:
 
 ```bash
-# Add the necessary keys and repositories
-wget -qO- [https://dl-ssl.google.com/linux/linux_signing_key.pub](https://dl-ssl.google.com/linux/linux_signing_key.pub) | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
-echo 'deb [signed-by=/usr/share/keyrings/dart.gpg arch=amd64] [https://storage.googleapis.com/download.dartlang.org/linux/debian](https://storage.googleapis.com/download.dartlang.org/linux/debian) stable main' | sudo tee /etc/apt/sources.list.d/dart.list
-
-# Perform the installation
-sudo apt update
-sudo apt install dart
+cd Revani
+dart run server/run.dart
 ```
-*You can verify the installation by running the `dart --version` command.*
 
-## 3. Preparing Auxiliary Services (Livekit)
-Revani works integrated with **Livekit** for real-time audio/video communication management.
+### Console Options:
+| Option | Action | Description |
+| :--- | :--- | :--- |
+| **1** | **Test Mode** | Starts the server in the current terminal (live output). |
+| **2** | **Live Mode** | Runs the server in the background using `nohup`. |
+| **3** | **Watch Logs** | Streams live server logs to your terminal. |
+| **4** | **Stop Server** | Safely terminates the background server process. |
+| **6** | **Update System** | Pulls the latest code from GitHub while **preserving** your `config.dart` and `.env`. |
+| **7** | **Clean Database** | Deletes `.db` files and resets the engine to factory state. |
 
-- **Quick development setup via Docker:**
+---
+
+## 📡 Auxiliary Services (Livekit) (Optional)
+
+Revani integrates with **Livekit** for real-time communication. If you plan to use these features, ensure a Livekit instance is reachable.
+
+**Quick Livekit Setup (via Docker):**
 ```bash
 docker run --rm -p 7880:7880 -p 7881:7881 -p 7882:7882/udp livekit/livekit server --dev
 ```
 
-## 4. Cloning Revani and Dependencies
-Pull the project source code from GitHub and install all required libraries:
+---
 
-```bash
-# Clone the project
-git clone [https://github.com/JeaFrid/Revani.git](https://github.com/JeaFrid/Revani.git)
-cd Revani
+## 🔒 Production SSL (Important)
 
-# Install Dart dependencies
-dart pub get
-```
+The automated script generates **Self-Signed Certificates** for immediate use. For production environments with a domain name, you should replace them with **Let's Encrypt**:
 
-## 5. Generating Security Certificates
-Revani mandates the use of **SSL/TLS** as part of its Zero-Trust architecture. You can follow two different methods depending on your needs:
-
-### Method A: Local Development and Testing (Self-Signed)
-You can quickly use the script within the project for development environments:
-
-```bash
-# Install Python dependency
-pip3 install cryptography
-
-# Run the certificate generation script
-python3 cert_gen.py
-```
-This process will create `server.crt` and `server.key` files in the directory.
-
-### Method B: Production Environment (Let's Encrypt)
-If you are working on a live server (with a domain), it is recommended to use **Certbot** to obtain a free and valid certificate:
-
-```bash
-# Install Certbot
-sudo apt install certbot -y
-
-# Obtain your certificate (Ensure port 80 is empty on the server)
-sudo certbot certonly --standalone -d yourdomain.com
-
-# Link the generated certificates to the names Revani recognizes (Symbolic Link)
-ln -s /etc/letsencrypt/live/[yourdomain.com/fullchain.pem](https://yourdomain.com/fullchain.pem) server.crt
-ln -s /etc/letsencrypt/live/[yourdomain.com/privkey.pem](https://yourdomain.com/privkey.pem) server.key
-```
-> 🛡️ **Security Note:** Ensure that Revani has the correct permissions to read the `server.key` file in production. Revani looks for these certificate paths based on the configuration in `lib/config.dart`.
-
-## 6. Environment Variables (.env) Configuration
-You need a secret key to lock/unlock the RevaniEngine storage motor.
-
-```bash
-nano .env
-```
-Add the following line and save (CTRL+O, Enter, CTRL+X):
-```text
-PASSWORD=Your_Very_Strong_Storage_Password
-```
-
-## 7. Firing Up the Oven: Starting the Server
-Everything is ready! Use the following command to start the Revani server:
-
-```bash
-dart bin/server.dart
-```
-
-
-
-### 🐳 Quick Setup Using Docker (Alternative)
-If Docker is installed on your system, you can run Revani in an isolated container without dealing with dependencies:
-
-```bash
-# Build the image
-docker build -t revani-bakery .
-
-# Start the container
-docker run -p 16897:16897 revani-bakery
-```
+1.  **Install Certbot:** `sudo apt install certbot -y`
+2.  **Generate Certs:** `sudo certbot certonly --standalone -d yourdomain.com`
+3.  **Link to Revani:**
+    ```bash
+    ln -sf /etc/letsencrypt/live/[yourdomain.com/fullchain.pem](https://yourdomain.com/fullchain.pem) server.crt
+    ln -sf /etc/letsencrypt/live/[yourdomain.com/privkey.pem](https://yourdomain.com/privkey.pem) server.key
+    ```
 
 ---
 
 ## 💡 Technical Tips
-* **Network Settings:** Revani listens on port `16897` by default. If a firewall (UFW) is active on your server, don't forget to allow it: `sudo ufw allow 16897`.
-* **Performance:** In the logs, you will see a message like "Recruiting 11 pastry chefs." This number is automatically determined based on your server's CPU core count, and each core serves as an **Isolate (Chef)**.
+
+* **Firewall:** Revani listens on port `16897` by default. Open it using: `sudo ufw allow 16897`.
+* **Process Persistence:** While `run.dart` Option 2 uses `nohup`, for enterprise-grade uptime, we recommend wrapping the execution in a **Systemd** service.
+* **Performance:** During startup, Revani spawns "Pastry Chefs" (Isolates) equal to your CPU thread count. For high-load environments, ensure your VPS has at least 2 vCPUs for optimal actor-model performance.
 
 ---
-The continuation of this documentation can be found in the *07_sdk_and_api_reference.md* file.
+**Next Step:** Learn how to interact with your new server in [SDK Usage & API Reference](./07_sdk_and_api_reference.md).

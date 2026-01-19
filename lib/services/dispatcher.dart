@@ -9,6 +9,7 @@
 import 'dart:async';
 import 'dart:isolate';
 import 'package:revani/core/database_engine.dart';
+import 'package:revani/core/rate_limiter.dart';
 import 'package:revani/schema/data_schema.dart';
 import 'package:revani/schema/livekit_schema.dart';
 import 'package:revani/schema/pubsub_schema.dart';
@@ -20,6 +21,7 @@ import 'package:uuid/uuid.dart';
 
 class RequestDispatcher {
   final RevaniDatabase db;
+  final RateLimiterClient? rateLimiter;
 
   late final DataSchemaProject projectSchema;
   late final DataSchemaAccount accountSchema;
@@ -30,7 +32,7 @@ class RequestDispatcher {
   late final StorageSchema storageSchema;
   final Uuid uuid = const Uuid();
 
-  RequestDispatcher(this.db) {
+  RequestDispatcher(this.db, {this.rateLimiter}) {
     projectSchema = DataSchemaProject(db);
     accountSchema = DataSchemaAccount(db, JeaTokener());
     dataSchema = DataSchemaData(db, JeaTokener());
@@ -40,11 +42,24 @@ class RequestDispatcher {
     querySchema = QuerySchema(db);
   }
 
+  void rebuildAllIndices() {
+    print('[*] Rebuilding Memory Indices from Disk Data...');
+    accountSchema.rebuildIndices();
+    projectSchema.rebuildIndices();
+    dataSchema.rebuildIndices();
+    storageSchema.rebuildIndices();
+    print('[+] Indices restored.');
+  }
+
   Future<Map<String, dynamic>> processCommand(Map<String, dynamic> req) async {
     final cmd = req['cmd'];
 
     try {
       DataResponse? res;
+
+      if (cmd.toString().startsWith('admin/')) {
+        return _processAdminCommand(req);
+      }
 
       switch (cmd) {
         case 'data/query':
@@ -298,6 +313,127 @@ class RequestDispatcher {
         'message': 'Internal Error',
         'error': e.toString(),
       };
+    }
+  }
+
+  Future<Map<String, dynamic>> _processAdminCommand(
+    Map<String, dynamic> req,
+  ) async {
+    final accountID = req['accountID'];
+    print('[DEBUG] Admin Request: ${req['cmd']} from $accountID');
+
+    if (accountID == null) {
+      return {'status': 401, 'message': 'Unauthorized: No accountID'};
+    }
+
+    final userData = db.get('account', accountID);
+    if (userData == null) {
+      return {'status': 404, 'message': 'Account not found in DB'};
+    }
+
+    String role = userData.value['role'] ?? 'user';
+
+    if (role != 'admin') {
+      final allAccounts = db.getAll('account');
+      bool hasOtherAdmin = false;
+
+      if (allAccounts != null) {
+        hasOtherAdmin = allAccounts.any((u) => u.value['role'] == 'admin');
+      }
+
+      if (!hasOtherAdmin) {
+        print(
+          '[!!!] NO ADMIN DETECTED. AUTO-PROMOTING THIS USER TO ADMIN [!!!]',
+        );
+        final newData = Map<String, dynamic>.from(userData.value);
+        newData['role'] = 'admin';
+        db.add('account', accountID, newData);
+        role = 'admin';
+      }
+    }
+
+    if (role != 'admin') {
+      return {'status': 403, 'message': 'Admin privileges required'};
+    }
+
+    final cmd = req['cmd'];
+    if (cmd.startsWith('admin/security/') && rateLimiter == null) {
+      return {'status': 500, 'message': 'RateLimiter not connected'};
+    }
+
+    switch (cmd) {
+      case 'admin/stats/full':
+        return {'status': 200, 'data': db.stats()};
+
+      case 'admin/users/list':
+        final allAccounts = db.getAll('account');
+        final cleanList = allAccounts?.map((e) {
+          return {
+            'id': e.value['id'],
+            'email': e.value['email'],
+            'role': e.value['role'],
+            'created_at': e.createdAt,
+          };
+        }).toList();
+        return {'status': 200, 'data': cleanList ?? []};
+
+      case 'admin/users/set-role':
+        final targetId = req['targetId'];
+        final newRole = req['newRole'];
+        final targetUser = db.get('account', targetId);
+        if (targetUser != null) {
+          final newData = Map<String, dynamic>.from(targetUser.value);
+          newData['role'] = newRole;
+          db.add('account', targetId, newData);
+          return {'status': 200, 'message': 'Role updated'};
+        }
+        return {'status': 404, 'message': 'Target user not found'};
+
+      case 'admin/users/delete':
+        final targetId = req['targetId'];
+        db.remove('account', targetId);
+        return {'status': 200, 'message': 'User deleted'};
+
+      case 'admin/projects/list':
+        final allProjects = db.getAll('project');
+        final cleanList = allProjects?.map((e) {
+          return {
+            'id': e.value['id'],
+            'name': e.value['name'],
+            'owner': e.value['owner'],
+            'created_at': e.createdAt,
+          };
+        }).toList();
+        return {'status': 200, 'data': cleanList ?? []};
+
+      case 'admin/system/force-gc':
+        db.performManualGC();
+        return {'status': 200, 'message': 'Garbage Collection triggered'};
+      case 'admin/security/ban-list':
+        final list = await rateLimiter!.adminOp('get_banned');
+        return {'status': 200, 'data': list};
+
+      case 'admin/security/unban':
+        await rateLimiter!.adminOp('unban', targetIp: req['targetIp']);
+        return {'status': 200, 'message': 'IP Unbanned'};
+
+      case 'admin/security/whitelist-list':
+        final list = await rateLimiter!.adminOp('get_whitelist');
+        return {'status': 200, 'data': list};
+
+      case 'admin/security/whitelist-add':
+        await rateLimiter!.adminOp('add_whitelist', targetIp: req['targetIp']);
+        return {'status': 200, 'message': 'IP Whitelisted'};
+
+      case 'admin/security/whitelist-remove':
+        await rateLimiter!.adminOp(
+          'remove_whitelist',
+          targetIp: req['targetIp'],
+        );
+        return {'status': 200, 'message': 'IP Removed from Whitelist'};
+
+      default:
+        return {'status': 400, 'message': 'Unknown admin command'};
     }
   }
 

@@ -7,6 +7,8 @@ Powered by JeaFriday ♥
 
 Revani is a high-performance NoSQL engine developed to eliminate the cumbersome structures and security vulnerabilities of traditional database management systems. It operates on a **'Zero-Trust'** principle by shielding data not at the application layer, but directly at the heart of the communication protocol through mandatory encryption. Its primary goal is to combine ultra-low latency with maximum data security in a single, unified structure.
 
+[![Install Revani](https://img.shields.io/badge/Install-Revani-FF69B4?style=for-the-badge&logo=rocket&logoColor=white)](./docs/06_installation_guide.md)
+
 For more in-depth information about Revani, you can examine the following documentation:
 
 | Section | Topic | Content |

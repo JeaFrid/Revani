@@ -22,6 +22,21 @@ class DataSchemaProject {
 
   DataSchemaProject(this.db);
 
+  void rebuildIndices() {
+    final projects = db.getAll(collectionTag);
+    if (projects == null) return;
+
+    for (var p in projects) {
+      final owner = p.value['owner'];
+      final name = p.value['name'];
+      final id = p.value['id'];
+      if (owner != null && name != null && id != null) {
+        final String compositeKey = "${owner}_$name";
+        db.setIndex(projectIndexTag, compositeKey, id);
+      }
+    }
+  }
+
   Future<DataResponse> createProject(
     String accountID,
     String projectName,
@@ -85,6 +100,19 @@ class DataSchemaAccount {
 
   DataSchemaAccount(this.db, this.tokener);
 
+  void rebuildIndices() {
+    final users = db.getAll(collectionTag);
+    if (users == null) return;
+
+    for (var u in users) {
+      final email = u.value['email'];
+      final id = u.value['id'];
+      if (email != null && id != null) {
+        db.setIndex(emailIndexTag, email, id);
+      }
+    }
+  }
+
   Future<String> getAccountRole(String accountID) async {
     final result = db.get(collectionTag, accountID);
     if (result == null) return 'user';
@@ -104,6 +132,15 @@ class DataSchemaAccount {
       );
     }
 
+    final allUsers = db.getAll(collectionTag);
+    bool hasAdmin = false;
+
+    if (allUsers != null && allUsers.isNotEmpty) {
+      hasAdmin = allUsers.any((u) => u.value['role'] == 'admin');
+    }
+
+    final String role = !hasAdmin ? 'admin' : 'user';
+
     final String randomId = uuid.v4();
     final String passwordHash = tokener.hashPassword(password);
     final String encryptedData = tokener.encryptStorage(jsonEncode(data));
@@ -113,17 +150,19 @@ class DataSchemaAccount {
       "email": email,
       "password": passwordHash,
       "data": encryptedData,
-      "role": "user",
+      "role": role,
       "id": randomId,
     });
 
     db.setIndex(emailIndexTag, email, randomId);
 
     return DataResponse(
-      message: "Account Created",
+      message: !hasAdmin
+          ? "System claimed! First ADMIN account created."
+          : "Account Created",
       error: "",
       status: StatusCodes.ok,
-      data: {"id": randomId, "email": email, "role": "user"},
+      data: {"id": randomId, "email": email, "role": role},
     );
   }
 
@@ -194,6 +233,23 @@ class DataSchemaData {
   final JeaTokener tokener;
 
   DataSchemaData(this.db, this.tokener);
+
+  void rebuildIndices() {
+    final dataList = db.getAll(collectionTag);
+    if (dataList == null) return;
+
+    for (var d in dataList) {
+      final pId = d.value['projectId'];
+      final bucket = d.value['bucket'];
+      final tag = d.value['tag'];
+      final id = d.value['id'];
+
+      if (pId != null && bucket != null && tag != null && id != null) {
+        final compositeKey = _generateCompositeKey(pId, bucket, tag);
+        db.setIndex(dataIndexTag, compositeKey, id);
+      }
+    }
+  }
 
   String _generateCompositeKey(String projectID, String bucket, String tag) {
     return "${projectID}_${bucket}_$tag";

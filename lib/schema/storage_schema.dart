@@ -5,7 +5,6 @@
  * See the LICENSE file in the project root for full license information.
  * * For commercial licensing, please contact: JeaFriday
  */
-
 import 'dart:typed_data';
 import 'package:revani/config.dart';
 import 'package:revani/schema/data_schema.dart';
@@ -26,8 +25,20 @@ class StorageSchema {
   final DataSchemaProject projectSchema;
 
   StorageSchema(this.db)
-    : core = RevaniStorageCore(),
-      projectSchema = DataSchemaProject(db);
+      : core = RevaniStorageCore(),
+        projectSchema = DataSchemaProject(db);
+
+  void rebuildIndices() {
+    final files = db.getAll(collectionTag);
+    if (files == null) return;
+
+    for (var f in files) {
+      final id = f.value['id'];
+      if (id != null) {
+        db.setIndex(storageIndexTag, id, id);
+      }
+    }
+  }
 
   Future<DataResponse> uploadFile(
     String accountID,

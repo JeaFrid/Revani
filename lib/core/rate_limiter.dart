@@ -5,7 +5,6 @@
  * See the LICENSE file in the project root for full license information.
  * * For commercial licensing, please contact: JeaFriday
  */
-
 import 'dart:async';
 import 'dart:isolate';
 import 'package:revani/config.dart';
@@ -19,6 +18,14 @@ class _RateLimitRequest {
   final String? role;
 
   _RateLimitRequest(this.replyPort, this.identifier, this.type, {this.role});
+}
+
+class _AdminRateLimitRequest {
+  final SendPort replyPort;
+  final String action;
+  final String? targetIp;
+
+  _AdminRateLimitRequest(this.replyPort, this.action, {this.targetIp});
 }
 
 class RateLimitResponse {
@@ -53,6 +60,16 @@ class RateLimiterClient {
     responsePort.close();
     return response;
   }
+
+  Future<dynamic> adminOp(String action, {String? targetIp}) async {
+    final responsePort = ReceivePort();
+    _actorPort.send(
+      _AdminRateLimitRequest(responsePort.sendPort, action, targetIp: targetIp),
+    );
+    final response = await responsePort.first;
+    responsePort.close();
+    return response;
+  }
 }
 
 class RateLimitActor {
@@ -75,6 +92,27 @@ class RateLimitActor {
           role: message.role,
         );
         message.replyPort.send(result);
+      } else if (message is _AdminRateLimitRequest) {
+        switch (message.action) {
+          case 'get_banned':
+            message.replyPort.send(limiter.getBannedList());
+            break;
+          case 'unban':
+            limiter.unban(message.targetIp!);
+            message.replyPort.send(true);
+            break;
+          case 'get_whitelist':
+            message.replyPort.send(limiter.getWhitelist());
+            break;
+          case 'add_whitelist':
+            limiter.addToWhitelist(message.targetIp!);
+            message.replyPort.send(true);
+            break;
+          case 'remove_whitelist':
+            limiter.removeFromWhitelist(message.targetIp!);
+            message.replyPort.send(true);
+            break;
+        }
       }
     });
   }
@@ -82,6 +120,7 @@ class RateLimitActor {
 
 class _RateLimitLogic {
   final Map<String, DateTime> _blacklistedIdentifiers = {};
+  final Set<String> _whitelistedIdentifiers = {'127.0.0.1', '::1'};
   final Map<String, int> _violationHistory = {};
   final Map<String, int> _requestCounts = {};
   final Map<String, DateTime> _windowStarts = {};
@@ -90,17 +129,49 @@ class _RateLimitLogic {
 
   _RateLimitLogic();
 
+  List<Map<String, String>> getBannedList() {
+    return _blacklistedIdentifiers.entries.map((e) {
+      return {'ip': e.key, 'until': e.value.toIso8601String()};
+    }).toList();
+  }
+
+  void unban(String ip) {
+    _blacklistedIdentifiers.remove(ip);
+    _violationHistory.remove(ip);
+  }
+
+  List<String> getWhitelist() {
+    return _whitelistedIdentifiers.toList();
+  }
+
+  void addToWhitelist(String ip) {
+    _whitelistedIdentifiers.add(ip);
+    unban(ip);
+  }
+
+  void removeFromWhitelist(String ip) {
+    _whitelistedIdentifiers.remove(ip);
+  }
+
   RateLimitResponse process(
     String identifier,
     RateLimiterType type, {
     String? role,
   }) {
+    if (_whitelistedIdentifiers.contains(identifier)) {
+      return RateLimitResponse(isAllowed: true);
+    }
+
+    if (role == 'admin') {
+      return RateLimitResponse(isAllowed: true);
+    }
+
     if (_isBanned(identifier)) {
       final releaseTime = _blacklistedIdentifiers[identifier];
       return RateLimitResponse(
         isAllowed: false,
         error: 'RateLimitBan',
-        status: 403,
+        status: 429,
         message: 'Banned until $releaseTime',
       );
     }
@@ -116,6 +187,8 @@ class _RateLimitLogic {
       limit = RevaniConfig.limits[type.name] ?? 60;
     }
 
+    if (limit > 100000) return RateLimitResponse(isAllowed: true);
+
     final suspiciousThreshold = (limit * 0.8).toInt();
     final requestCount = _incrementAndGetCount(key);
 
@@ -124,17 +197,15 @@ class _RateLimitLogic {
       return RateLimitResponse(
         isAllowed: false,
         error: 'RateLimitBan',
-        status: 403,
+        status: 429,
         message: 'Limit exceeded for ${role ?? "IP Address"}.',
       );
     }
 
     if (requestCount > suspiciousThreshold) {
       return RateLimitResponse(
-        isAllowed: false,
-        error: 'RateLimitExceeded',
-        status: 429,
-        message: 'Requesting too fast.',
+        isAllowed: true,
+        message: 'Requesting too fast (Warning).',
       );
     }
 

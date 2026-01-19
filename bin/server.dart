@@ -1,3 +1,10 @@
+/*
+ * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
+ * * This project is part of Revani
+ * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+ * See the LICENSE file in the project root for full license information.
+ * * For commercial licensing, please contact: JeaFriday
+ */
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
@@ -37,9 +44,12 @@ void main(List<String> args) async {
   final rateLimitReceivePort = ReceivePort();
   await Isolate.spawn(RateLimitActor.start, rateLimitReceivePort.sendPort);
   final SendPort rateLimitSendPort = await rateLimitReceivePort.first;
-  print('[~] Dough proofer is warm and running.');
+  final rateLimiterClient = RateLimiterClient(rateLimitSendPort);
 
-  final dbServer = RequestDispatcher(db);
+  print('[~] Dough proofer is warm and running.');
+  final dbServer = RequestDispatcher(db, rateLimiter: rateLimiterClient);
+  dbServer.rebuildAllIndices();
+
   final mainReceivePort = ReceivePort();
 
   final restHandler = const Pipeline()

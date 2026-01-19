@@ -5,14 +5,12 @@
  * See the LICENSE file in the project root for full license information.
  * * For commercial licensing, please contact: JeaFriday
  */
-
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:isolate';
 import 'dart:math';
-
 import 'package:revani/config.dart';
 
 class RevaniBson {
@@ -269,6 +267,38 @@ class RevaniDatabase {
 
     if (checkedCount > 0 && (expiredCount / checkedCount) > 0.25) {
       Future.microtask(() => _performIncrementalGC());
+    }
+  }
+
+  void performManualGC() {
+    final int now = DateTime.now().millisecondsSinceEpoch;
+    final List<String> bucketsToRemove = [];
+
+    for (final bucketName in _box.keys) {
+      final Map<String, RevaniData>? bucketContent = _box[bucketName];
+      if (bucketContent == null) continue;
+
+      final List<String> keysToRemove = [];
+
+      for (final entry in bucketContent.entries) {
+        if (entry.value.expiresAt != null) {
+          if (now > entry.value.expiresAt!) {
+            keysToRemove.add(entry.key);
+          }
+        }
+      }
+
+      for (final key in keysToRemove) {
+        remove(bucketName, key);
+      }
+
+      if (bucketContent.isEmpty) {
+        bucketsToRemove.add(bucketName);
+      }
+    }
+
+    for (final bucket in bucketsToRemove) {
+      _box.remove(bucket);
     }
   }
 
@@ -599,6 +629,7 @@ class RevaniPersistence {
     try {
       final action = event['action'];
       final bucket = utf8.encode(event['bucket']);
+      final bucketName = event['bucket'];
 
       if (action == 'add') {
         _writeBuffer.addByte(0);
@@ -639,7 +670,9 @@ class RevaniPersistence {
         _writeBuffer.add(bucket);
       }
 
-      if (_writeBuffer.length > 65536) {
+      if (bucketName == 'account' || bucketName == 'project') {
+        _flushBuffer(force: true);
+      } else if (_writeBuffer.length > 65536) {
         _flushBuffer();
       }
     } catch (e) {
@@ -647,22 +680,22 @@ class RevaniPersistence {
     }
   }
 
-  Future<void> _flushBuffer() async {
+  Future<void> _flushBuffer({bool force = false}) async {
     if (_writeBuffer.isEmpty || _raf == null || _isCompacting) return;
 
     final bytes = _writeBuffer.takeBytes();
     try {
       await _raf!.writeFrom(bytes);
+      if (force) {
+        await _raf!.flush();
+      }
     } catch (e) {
       _writeBuffer.add(bytes);
     }
   }
 
   Future<void> forceSync() async {
-    await _flushBuffer();
-    if (_raf != null) {
-      await _raf!.flush();
-    }
+    await _flushBuffer(force: true);
   }
 
   Uint8List _uint32ToBytes(int value) {
