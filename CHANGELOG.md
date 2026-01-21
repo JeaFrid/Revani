@@ -23,3 +23,38 @@
 ### Fixed
 - **Cleanup Logic**: Resolved issues where `.dart_tool` and lock files could persist after a system reset.
 - **Log Management**: Streamlined `nohup` log redirection and real-time monitoring via the new management console.
+
+## [1.2.0] - 2026-01-21
+
+### 🚀 Major Feature: BaaS Transformation
+Revani has evolved from a NoSQL engine into a comprehensive **Backend-as-a-Service** platform. It now supports end-user management, social networking features, and instant messaging out of the box.
+
+### Added
+- **Identity System (`RevaniUser`)**:
+  - Implementation of **End-User Registration & Login** within specific projects.
+  - Secure profile management with automatic password hash stripping on retrieval.
+  - `changePassword` and `editProfile` endpoints with old-password verification.
+  
+- **Social Graph Engine (`RevaniSocial`)**:
+  - **Posts**: Support for text, images (max 10), videos, and document attachments.
+  - **Interactions**: Native `toggleLike` logic for posts and comments.
+  - **Comments**: Full commenting system with nested like support.
+  - **Analytics**: Built-in view counting mechanism for posts.
+
+- **Messaging Infrastructure (`RevaniChat`)**:
+  - **Chat Management**: Creation of multi-participant chat rooms.
+  - **Message Ops**: Send, edit, and delete messages with ownership verification.
+  - **Reactions & Pinning**: Support for emoji reactions and pinning crucial messages in a chat.
+
+- **High-Performance Batch Ops**:
+  - Added `addAll` (Batch Write), `getAll` (Bulk Read), and `deleteAll` (Bulk Delete) commands to both Server Engine and Client SDKs.
+  - Optimized for low-latency mass data ingestion.
+
+### Security
+- **Granular Ownership**: Implemented strict `sender_id` checks for message updates/deletions.
+- **Double-Layer Hashing**: End-user passwords are hashed independently using Argon2id, keeping them invisible even to the project owner.
+
+### Changed
+- **Schema Consolidation**: Merged `User`, `Social`, and `Messaging` logic into `lib/schema/data_schema.dart` for unified index management.
+- **Dispatcher Routing**: Expanded `processCommand` switch-case to handle new `user/*`, `social/*`, and `chat/*` namespaces.
+- **Dart SDK**: `RevaniClient` now exposes dedicated accessors: `.user`, `.social`, `.chat`, `.data`, `.project`, `.account`.

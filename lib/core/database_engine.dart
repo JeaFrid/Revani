@@ -1,10 +1,3 @@
-/*
- * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
- * * This project is part of Revani
- * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
- * See the LICENSE file in the project root for full license information.
- * * For commercial licensing, please contact: JeaFriday
- */
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -310,6 +303,7 @@ class RevaniDatabase {
     int? createdAt,
     int? expiresAt,
     Uint8List? preEncodedValue,
+    Map<String, Uint8List>? batchItems,
   }) {
     if (_eventController.hasListener) {
       _eventController.add({
@@ -320,6 +314,7 @@ class RevaniDatabase {
         'preEncodedValue': preEncodedValue,
         'createdAt': createdAt,
         'expiresAt': expiresAt,
+        'batchItems': batchItems,
       });
     }
   }
@@ -338,6 +333,45 @@ class RevaniDatabase {
 
   void addRaw(String bucket, String tag, Uint8List rawValue, {Duration? ttl}) {
     _addInternal(bucket, tag, rawValue, null, ttl: ttl);
+  }
+
+  void addAll(
+    String bucket,
+    Map<String, Map<String, dynamic>> items, {
+    Duration? ttl,
+  }) {
+    _box.putIfAbsent(bucket, () => <String, RevaniData>{});
+    final now = DateTime.now().millisecondsSinceEpoch;
+    int? expiresAt;
+    if (ttl != null) {
+      expiresAt = now + ttl.inMilliseconds;
+    }
+
+    final Map<String, Uint8List> encodedBatch = {};
+
+    items.forEach((tag, value) {
+      final bytes = RevaniBson.encode(value);
+      encodedBatch[tag] = bytes;
+
+      final data = RevaniData.fromBytes(
+        bucket,
+        tag,
+        bytes,
+        createdAt: now,
+        expiresAt: expiresAt,
+      );
+      _box[bucket]![tag] = data;
+    });
+
+    _createEvent(
+      'addAll',
+      bucket,
+      null,
+      null,
+      batchItems: encodedBatch,
+      createdAt: now,
+      expiresAt: expiresAt,
+    );
   }
 
   void _addInternal(
@@ -388,7 +422,26 @@ class RevaniDatabase {
   }
 
   List<RevaniData>? getAll(String bucket) {
-    return _box[bucket]?.values.where((e) => !e.isExpired).toList();
+    final bucketData = _box[bucket];
+    if (bucketData == null) return null;
+
+    final List<RevaniData> validData = [];
+    final List<String> expiredTags = [];
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    bucketData.forEach((tag, data) {
+      if (data.expiresAt != null && now > data.expiresAt!) {
+        expiredTags.add(tag);
+      } else {
+        validData.add(data);
+      }
+    });
+
+    for (var tag in expiredTags) {
+      remove(bucket, tag);
+    }
+
+    return validData;
   }
 
   List<RevaniData> getLatest(String bucket, int count) {
@@ -430,6 +483,10 @@ class RevaniDatabase {
       _box.remove(bucket);
       _createEvent('clear', bucket, null, null);
     }
+  }
+
+  void deleteAll(String bucket) {
+    clear(bucket);
   }
 
   void setIndex(String indexName, String key, String id) {
@@ -601,6 +658,37 @@ class RevaniPersistence {
             db.box[bucket]?.remove(tag);
           } else if (actionByte == 2) {
             db.box.remove(bucket);
+          } else if (actionByte == 3) {
+            final createdAt = await _readUint64(reader);
+            final hasExpiry = await reader.readByte();
+            int? expiresAt;
+            if (hasExpiry == 1) {
+              expiresAt = await _readUint64(reader);
+            }
+
+            final itemCount = await _readUint32(reader);
+            db.box.putIfAbsent(bucket, () => <String, RevaniData>{});
+
+            for (int i = 0; i < itemCount; i++) {
+              final tagLen = await _readUint32(reader);
+              final tagBytes = await reader.read(tagLen);
+              final tag = utf8.decode(tagBytes);
+
+              final valLen = await _readUint32(reader);
+              final valBytes = await reader.read(valLen);
+              final Uint8List value = Uint8List.fromList(valBytes);
+
+              final now = DateTime.now().millisecondsSinceEpoch;
+              if (expiresAt == null || now < expiresAt) {
+                db.box[bucket]![tag] = RevaniData.fromBytes(
+                  bucket,
+                  tag,
+                  value,
+                  createdAt: createdAt,
+                  expiresAt: expiresAt,
+                );
+              }
+            }
           }
         } catch (e) {
           stderr.writeln('Corrupt Record Error: $e');
@@ -668,6 +756,31 @@ class RevaniPersistence {
         _writeBuffer.addByte(2);
         _writeBuffer.add(_uint32ToBytes(bucket.length));
         _writeBuffer.add(bucket);
+      } else if (action == 'addAll') {
+        final Map<String, Uint8List> items = event['batchItems'];
+        _writeBuffer.addByte(3);
+        _writeBuffer.add(_uint32ToBytes(bucket.length));
+        _writeBuffer.add(bucket);
+
+        final createdAt =
+            event['createdAt'] ?? DateTime.now().millisecondsSinceEpoch;
+        _writeBuffer.add(_uint64ToBytes(createdAt));
+
+        if (event['expiresAt'] != null) {
+          _writeBuffer.addByte(1);
+          _writeBuffer.add(_uint64ToBytes(event['expiresAt']));
+        } else {
+          _writeBuffer.addByte(0);
+        }
+
+        _writeBuffer.add(_uint32ToBytes(items.length));
+        items.forEach((tagStr, bytes) {
+          final tag = utf8.encode(tagStr);
+          _writeBuffer.add(_uint32ToBytes(tag.length));
+          _writeBuffer.add(tag);
+          _writeBuffer.add(_uint32ToBytes(bytes.length));
+          _writeBuffer.add(bytes);
+        });
       }
 
       if (bucketName == 'account' || bucketName == 'project') {
