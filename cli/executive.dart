@@ -1,1219 +1,343 @@
+/*
+ * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
+ * This project is part of Revani
+ * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+ * See the LICENSE file in the project root for full license information.
+ * For commercial licensing, please contact: JeaFriday
+ */
+
 import 'dart:io';
-import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-import 'dart:math';
-import 'package:crypto/crypto.dart';
-import 'package:encrypt/encrypt.dart' as encrypt;
+import 'dart:async';
+import 'package:args/args.dart';
+import '../client/dart/revani.dart';
 
-class RevaniResponse {
-  final int status;
-  final String message;
-  final String? error;
-  final dynamic data;
-  final String? description;
+const String _kReset = '\x1B[0m';
+const String _kBold = '\x1B[1m';
+const String _kRed = '\x1B[31m';
+const String _kGreen = '\x1B[32m';
+const String _kYellow = '\x1B[33m';
+const String _kCyan = '\x1B[36m';
+const String _kMagenta = '\x1B[35m';
 
-  RevaniResponse({
-    required this.status,
-    required this.message,
-    this.error,
-    this.data,
-    this.description,
-  });
+void main(List<String> arguments) async {
+  final parser = ArgParser()
+    ..addFlag(
+      'local',
+      abbr: 'l',
+      help: 'Connect to localhost:16897',
+      defaultsTo: false,
+    )
+    ..addOption('host', abbr: 'h', help: 'Server Host')
+    ..addOption('port', abbr: 'p', help: 'Server Port');
 
-  bool get isSuccess => status >= 200 && status < 300;
+  ArgResults argResults = parser.parse(arguments);
 
-  void handle({
-    Function(dynamic data)? onSuccess,
-    Function(String error)? onError,
-  }) {
-    if (isSuccess) {
-      if (onSuccess != null) onSuccess(data);
+  String host = '127.0.0.1';
+  int port = 16897;
+
+  print(
+    _kMagenta +
+        r'''
+    ____                    _   
+   / __ \___ _      ______ _____(_)  
+  / /_/ / _ \ | / / __ `/ __ \ /  
+ / _, _/  __/ |/ / /_/ / / / / /  
+/_/ |_|\___/|___/\__,_/_/ /_/_/   
+            CONSOLE
+''' +
+        _kReset,
+  );
+
+  if (argResults['local'] == true) {
+    print('${_kYellow}Mode: Localhost Selected$_kReset');
+  } else {
+    if (argResults['host'] != null) {
+      host = argResults['host'];
     } else {
-      if (onError != null) onError(error ?? message);
+      stdout.write('Server Host (Default: 127.0.0.1): ');
+      final input = stdin.readLineSync()?.trim();
+      if (input != null && input.isNotEmpty) host = input;
+    }
+
+    if (argResults['port'] != null) {
+      port = int.tryParse(argResults['port']) ?? 16897;
+    } else {
+      stdout.write('Server Port (Default: 16897): ');
+      final input = stdin.readLineSync()?.trim();
+      if (input != null && input.isNotEmpty) {
+        port = int.tryParse(input) ?? 16897;
+      }
     }
   }
 
-  static RevaniResponse fromMap(Map<String, dynamic> map) {
-    return RevaniResponse(
-      status: map['status'] ?? 500,
-      message: map['message'] ?? 'Unknown',
-      error: map['error'],
-      data: map['data'],
-      description: map['description'],
-    );
+  final client = RevaniClient(host: host, port: port, secure: true);
+
+  try {
+    stdout.write('Connecting to $host:$port... ');
+    await client.connect();
+    print('$_kGreen Connected.$_kReset');
+  } catch (e) {
+    print('$_kRed Connection failed: $e$_kReset');
+    print('Hint: Use --local if running locally, or check SSL certs.');
+    exit(1);
   }
 
-  static RevaniResponse networkError(String error) {
-    return RevaniResponse(
-      status: 503,
-      message: 'Network Error',
-      error: error,
-      description: 'Connection failed',
-    );
+  if (await _authenticate(client)) {
+    await _userLoop(client);
   }
 }
 
-class RevaniClient {
-  final String host;
-  final int port;
-  final bool secure;
-  final bool autoReconnect;
+Future<bool> _authenticate(RevaniClient client) async {
+  print('\n$_kBold=== USER LOGIN ===$_kReset');
 
-  Socket? _socket;
-  String? _sessionKey;
-  String? _accountID;
-  String? _projectName;
-  String? _projectID;
-  bool _isReconnecting = false;
-  final String _sessionFile = '.revani_session';
+  while (true) {
+    stdout.write('Email: ');
+    final email = stdin.readLineSync()?.trim() ?? '';
 
-  late final RevaniAccount account;
-  late final RevaniProject project;
-  late final RevaniData data;
-  late final RevaniUser user;
-  late final RevaniSocial social;
-  late final RevaniChat chat;
-  late final RevaniStorage storage;
-  late final RevaniLivekit livekit;
-  late final RevaniPubSub pubsub;
+    stdout.write('Password: ');
+    stdin.echoMode = false;
+    final password = stdin.readLineSync()?.trim() ?? '';
+    stdin.echoMode = true;
+    print('');
 
-  StreamController<Map<String, dynamic>> _responseController =
-      StreamController<Map<String, dynamic>>.broadcast();
-  final List<int> _buffer = [];
-
-  RevaniClient({
-    required this.host,
-    this.port = 16897,
-    this.secure = true,
-    this.autoReconnect = true,
-  }) {
-    account = RevaniAccount(this);
-    project = RevaniProject(this);
-    data = RevaniData(this);
-    user = RevaniUser(this);
-    social = RevaniSocial(this);
-    chat = RevaniChat(this);
-    storage = RevaniStorage(this);
-    livekit = RevaniLivekit(this);
-    pubsub = RevaniPubSub(this);
-  }
-
-  Future<void> connect() async {
-    try {
-      if (secure) {
-        _socket = await SecureSocket.connect(
-          host,
-          port,
-          onBadCertificate: (cert) => true,
-        );
-      } else {
-        _socket = await Socket.connect(host, port);
-      }
-
-      _socket!.listen(
-        _onData,
-        onError: (e) => _handleConnectionError(e),
-        onDone: () => _handleConnectionDone(),
-      );
-      _isReconnecting = false;
-
-      await _checkLocalSession();
-    } catch (e) {
-      if (autoReconnect) {
-        _attemptReconnect();
-      } else {
-        throw Exception("Connection failed: $e");
-      }
-    }
-  }
-
-  Future<RevaniResponse> authenticateWithToken() async {
-    if (_sessionKey == null) {
-      return RevaniResponse(
-        status: 401,
-        message: "No token found",
-        error: "Session key missing",
-      );
-    }
-
-    final res = await execute({
-      'cmd': 'auth/verify-token',
-      'token': _sessionKey,
-    });
-
-    if (res.isSuccess) {
-      final data = res.data;
-      if (data['type'] == 'account') {
-        setAccount(data['user_id']);
-      } else {
-        setAccount(data['project_id']);
-      }
-    } else {
-      _clearSession();
-    }
-    return res;
-  }
-
-  Future<void> _checkLocalSession() async {
-    final file = File(_sessionFile);
-    if (await file.exists()) {
-      try {
-        final content = await file.readAsString();
-        final map = jsonDecode(content);
-        _sessionKey = map['session_key'];
-        _accountID = map['account_id'];
-      } catch (_) {}
-    }
-  }
-
-  Future<void> _saveSession() async {
-    if (_sessionKey != null) {
-      final file = File(_sessionFile);
-      await file.writeAsString(
-        jsonEncode({'session_key': _sessionKey, 'account_id': _accountID}),
-      );
-    }
-  }
-
-  void _clearSession() {
-    _sessionKey = null;
-    _accountID = null;
-    final file = File(_sessionFile);
-    if (file.existsSync()) {
-      file.deleteSync();
-    }
-  }
-
-  bool get isSignedIn => _sessionKey != null;
-
-  void _handleConnectionError(dynamic error) {
-    if (autoReconnect) _attemptReconnect();
-  }
-
-  void _handleConnectionDone() {
-    if (autoReconnect) _attemptReconnect();
-  }
-
-  void _attemptReconnect() async {
-    if (_isReconnecting) return;
-    _isReconnecting = true;
-    _socket?.destroy();
-    _socket = null;
-
-    int attempts = 0;
-    while (_socket == null) {
-      attempts++;
-      final delay = min(30, pow(2, attempts));
-      await Future.delayed(Duration(seconds: delay.toInt()));
-      try {
-        await connect();
-      } catch (_) {}
-    }
-  }
-
-  void _onData(Uint8List data) {
-    _buffer.addAll(data);
-    while (_buffer.length >= 4) {
-      final header = ByteData.sublistView(
-        Uint8List.fromList(_buffer.sublist(0, 4)),
-      );
-      final length = header.getUint32(0);
-
-      if (_buffer.length >= length + 4) {
-        final payload = _buffer.sublist(4, length + 4);
-        _buffer.removeRange(0, length + 4);
-
-        try {
-          final jsonString = utf8.decode(payload);
-          final json = jsonDecode(jsonString);
-
-          if (json is Map<String, dynamic> &&
-              json.containsKey('encrypted') &&
-              _sessionKey != null) {
-            try {
-              final decrypted = _decrypt(json['encrypted']);
-              _responseController.add(jsonDecode(decrypted));
-            } catch (e) {
-              _responseController.addError(e);
-            }
-          } else {
-            _responseController.add(json);
-          }
-        } catch (e) {}
-      } else {
-        break;
-      }
-    }
-  }
-
-  Future<RevaniResponse> execute(
-    Map<String, dynamic> command, {
-    bool useEncryption = true,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    if (_socket == null) {
-      final res = RevaniResponse.networkError("Not connected");
-      res.handle(onError: onError);
-      return res;
+    if (email.isEmpty || password.isEmpty) {
+      print('${_kRed}Credentials cannot be empty.$_kReset');
+      continue;
     }
 
     try {
-      final responseFuture = _responseController.stream.first;
+      final res = await client.account.login(email, password);
+      if (res.isSuccess) {
+        final checkRole = await client.execute({
+          'cmd': 'admin/stats/full',
+          'accountID': client.accountID,
+        });
 
-      final payload = (useEncryption && _sessionKey != null)
-          ? {'encrypted': _encrypt(jsonEncode(command))}
-          : command;
-
-      final bytes = utf8.encode(jsonEncode(payload));
-      final header = ByteData(4)..setUint32(0, bytes.length);
-
-      _socket!.add(header.buffer.asUint8List());
-      _socket!.add(bytes);
-
-      final rawResponse = await responseFuture.timeout(Duration(seconds: 15));
-      final response = RevaniResponse.fromMap(rawResponse);
-
-      response.handle(onSuccess: onSuccess, onError: onError);
-      return response;
-    } catch (e) {
-      if (e is TimeoutException) {
-        final res = RevaniResponse.networkError("Timeout");
-        res.handle(onError: onError);
-        return res;
-      }
-      final res = RevaniResponse.networkError(e.toString());
-      res.handle(onError: onError);
-      return res;
-    }
-  }
-
-  String _encrypt(String text) {
-    final wrapper = jsonEncode({
-      "payload": text,
-      "ts": DateTime.now().millisecondsSinceEpoch,
-    });
-
-    final salt = encrypt.IV.fromSecureRandom(16);
-    final keyBytes = sha256
-        .convert(utf8.encode(_sessionKey! + salt.base64))
-        .bytes;
-    final key = encrypt.Key(Uint8List.fromList(keyBytes));
-    final iv = encrypt.IV.fromSecureRandom(16);
-
-    final encrypter = encrypt.Encrypter(
-      encrypt.AES(key, mode: encrypt.AESMode.gcm),
-    );
-    final encrypted = encrypter.encrypt(wrapper, iv: iv);
-
-    return "${salt.base64}:${iv.base64}:${encrypted.base64}";
-  }
-
-  String _decrypt(String encryptedData) {
-    final parts = encryptedData.split(':');
-    final salt = encrypt.IV.fromBase64(parts[0]);
-    final iv = encrypt.IV.fromBase64(parts[1]);
-    final cipherText = parts[2];
-
-    final keyBytes = sha256
-        .convert(utf8.encode(_sessionKey! + salt.base64))
-        .bytes;
-    final key = encrypt.Key(Uint8List.fromList(keyBytes));
-
-    final encrypter = encrypt.Encrypter(
-      encrypt.AES(key, mode: encrypt.AESMode.gcm),
-    );
-    final decrypted = encrypter.decrypt64(cipherText, iv: iv);
-
-    final Map<String, dynamic> wrapper = jsonDecode(decrypted);
-    return wrapper['payload'];
-  }
-
-  void setSession(String key) => _sessionKey = key;
-  void setAccount(String id) => _accountID = id;
-  void setProject(String name, String? id) {
-    _projectName = name;
-    _projectID = id;
-  }
-
-  String get accountID => _accountID ?? "";
-  String get projectName => _projectName ?? "";
-  String get projectID => _projectID ?? "";
-
-  void logout() {
-    _clearSession();
-    disconnect();
-  }
-
-  void disconnect() {
-    _socket?.destroy();
-    _socket = null;
-    _sessionKey = null;
-    _accountID = null;
-    _projectName = null;
-    _projectID = null;
-  }
-}
-
-class RevaniAccount {
-  final RevaniClient _client;
-  RevaniAccount(this._client);
-
-  Future<RevaniResponse> create(
-    String email,
-    String password, {
-    Map<String, dynamic>? extraData,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'account/create',
-        'email': email,
-        'password': password,
-        'data': extraData ?? {},
-      },
-      useEncryption: false,
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> login(
-    String email,
-    String password, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    final res = await _client.execute({
-      'cmd': 'auth/login',
-      'email': email,
-      'password': password,
-    }, useEncryption: false);
-
-    if (res.isSuccess) {
-      _client.setSession(res.data['session_key'] ?? res.data);
-
-      final idRes = await _client.execute({
-        'cmd': 'account/get-id',
-        'email': email,
-        'password': password,
-      });
-
-      if (idRes.isSuccess) {
-        _client.setAccount(idRes.data['id']);
-        if (idRes.data['token'] != null) {
-          _client.setSession(idRes.data['token']);
+        if (checkRole.status == 200) {
+          print(
+            '$_kRed\n[ACCESS DENIED] This account has Administrator privileges.',
+          );
+          print(
+            'Please use the "Executive Console" for admin operations.$_kReset',
+          );
+          client.logout();
+          exit(0);
         }
-        await _client._saveSession();
-        if (onSuccess != null) onSuccess(idRes.data);
+
+        print('$_kGreen Login Successful. Welcome, User.$_kReset');
+        return true;
       } else {
-        if (onError != null) onError(idRes.error ?? idRes.message);
+        print('${_kRed}Access Denied: ${res.message}$_kReset');
+      }
+    } catch (e) {
+      print('${_kRed}Login Error: $e$_kReset');
+      return false;
+    }
+  }
+}
+
+Future<void> _userLoop(RevaniClient client) async {
+  String? activeProject;
+
+  while (true) {
+    String status = activeProject == null
+        ? '${_kRed}No Project Selected$_kReset'
+        : '${_kGreen}Project: $activeProject$_kReset';
+
+    print('\n$_kBold=== DASHBOARD ===$_kReset');
+    print('Status: $status');
+    print('-----------------------');
+    print('1. Create New Project');
+    print('2. Select Project');
+    if (activeProject != null) {
+      print('3. ${_kCyan}Add Data$_kReset');
+      print('4. ${_kCyan}Get Data (By Tag)$_kReset');
+      print('5. ${_kCyan}Query Data (Filter)$_kReset');
+      print('6. ${_kCyan}Update Data$_kReset');
+      print('7. ${_kCyan}Delete Data$_kReset');
+    }
+    print('0. Exit');
+    stdout.write('${_kYellow}console> $_kReset');
+
+    final choice = stdin.readLineSync()?.trim();
+
+    try {
+      switch (choice) {
+        case '1':
+          await _createProject(client);
+          break;
+        case '2':
+          activeProject = await _selectProject(client);
+          break;
+        case '3':
+          if (activeProject != null) await _addData(client);
+          break;
+        case '4':
+          if (activeProject != null) await _getData(client);
+          break;
+        case '5':
+          if (activeProject != null) await _queryData(client);
+          break;
+        case '6':
+          if (activeProject != null) await _updateData(client);
+          break;
+        case '7':
+          if (activeProject != null) await _deleteData(client);
+          break;
+        case '0':
+          print('Goodbye.');
+          client.logout();
+          exit(0);
+        default:
+          print('Invalid option.');
+      }
+    } catch (e) {
+      print('${_kRed}Operation Failed: $e$_kReset');
+    }
+  }
+}
+
+Future<void> _createProject(RevaniClient client) async {
+  stdout.write('New Project Name: ');
+  final name = stdin.readLineSync()?.trim();
+  if (name == null || name.isEmpty) return;
+
+  final res = await client.project.create(name);
+  if (res.isSuccess) {
+    print('$_kGreen Project "$name" created successfully.$_kReset');
+  } else {
+    print('$_kRed Error: ${res.error ?? res.message}$_kReset');
+  }
+}
+
+Future<String?> _selectProject(RevaniClient client) async {
+  stdout.write('Enter Project Name to Select: ');
+  final name = stdin.readLineSync()?.trim();
+  if (name == null || name.isEmpty) return null;
+
+  final res = await client.project.use(name);
+  if (res.isSuccess) {
+    print('$_kGreen Project selected.$_kReset');
+    return name;
+  } else {
+    print('$_kRed Project not found or access denied.$_kReset');
+    return null;
+  }
+}
+
+Future<void> _addData(RevaniClient client) async {
+  stdout.write('Bucket (Category): ');
+  final bucket = stdin.readLineSync()?.trim();
+
+  stdout.write('Tag (Unique Key): ');
+  final tag = stdin.readLineSync()?.trim();
+
+  stdout.write('Value (JSON Format e.g. {"age": 25}): ');
+  final jsonStr = stdin.readLineSync()?.trim();
+
+  if (bucket == null || tag == null || jsonStr == null) return;
+
+  try {
+    final Map<String, dynamic> value = jsonDecode(jsonStr);
+    final res = await client.data.add(bucket: bucket, tag: tag, value: value);
+    if (res.isSuccess) {
+      print('$_kGreen Data saved.$_kReset');
+    } else {
+      print('$_kRed Error: ${res.message}$_kReset');
+    }
+  } catch (e) {
+    print('$_kRed Invalid JSON format.$_kReset');
+  }
+}
+
+Future<void> _getData(RevaniClient client) async {
+  stdout.write('Bucket: ');
+  final bucket = stdin.readLineSync()?.trim();
+  stdout.write('Tag: ');
+  final tag = stdin.readLineSync()?.trim();
+
+  if (bucket == null || tag == null) return;
+
+  final res = await client.data.get(bucket: bucket, tag: tag);
+  if (res.isSuccess) {
+    print('\n$_kCyan--- DATA ---$_kReset');
+    print(JsonEncoder.withIndent('  ').convert(res.data));
+    print('$_kCyan------------$_kReset\n');
+  } else {
+    print('$_kRed Data not found.$_kReset');
+  }
+}
+
+Future<void> _queryData(RevaniClient client) async {
+  print(
+    '${_kYellow}Query Format: {"where": [{"field": "age", "op": ">", "value": 18}]}$_kReset',
+  );
+  stdout.write('Bucket: ');
+  final bucket = stdin.readLineSync()?.trim();
+  stdout.write('Query JSON: ');
+  final qStr = stdin.readLineSync()?.trim();
+
+  if (bucket == null || qStr == null) return;
+
+  try {
+    final qJson = jsonDecode(qStr);
+    final res = await client.data.query(bucket: bucket, query: qJson);
+
+    if (res.isSuccess) {
+      final list = res.data as List;
+      print('\n$_kGreen Found ${list.length} records:$_kReset');
+      for (var item in list) {
+        print(JsonEncoder.withIndent('  ').convert(item));
+        print('-');
       }
     } else {
-      if (onError != null) onError(res.error ?? res.message);
+      print('$_kRed Query failed: ${res.message}$_kReset');
     }
-    return res;
-  }
-
-  Future<RevaniResponse> getData({
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'account/get-data', 'id': _client.accountID},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
+  } catch (e) {
+    print('$_kRed Invalid JSON.$_kReset');
   }
 }
 
-class RevaniProject {
-  final RevaniClient _client;
-  RevaniProject(this._client);
+Future<void> _updateData(RevaniClient client) async {
+  stdout.write('Bucket: ');
+  final bucket = stdin.readLineSync()?.trim();
+  stdout.write('Tag: ');
+  final tag = stdin.readLineSync()?.trim();
+  stdout.write('New Value (JSON): ');
+  final jsonStr = stdin.readLineSync()?.trim();
 
-  Future<RevaniResponse> use(
-    String projectName, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    final res = await _client.execute({
-      'cmd': 'project/exist',
-      'accountID': _client.accountID,
-      'projectName': projectName,
-    });
+  if (bucket == null || tag == null || jsonStr == null) return;
 
+  try {
+    final val = jsonDecode(jsonStr);
+    final res = await client.data.update(
+      bucket: bucket,
+      tag: tag,
+      newValue: val,
+    );
     if (res.isSuccess) {
-      _client.setProject(projectName, res.data['id'] ?? res.data);
-      if (onSuccess != null) onSuccess(res.data);
+      print('$_kGreen Data updated.$_kReset');
     } else {
-      if (onError != null) onError(res.error ?? res.message);
+      print('$_kRed Error: ${res.message}$_kReset');
     }
-    return res;
-  }
-
-  Future<RevaniResponse> create(
-    String projectName, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    final res = await _client.execute({
-      'cmd': 'project/create',
-      'accountID': _client.accountID,
-      'projectName': projectName,
-    });
-    if (res.isSuccess) {
-      _client.setProject(projectName, res.data['id']);
-      if (onSuccess != null) onSuccess(res.data);
-    } else {
-      if (onError != null) onError(res.error ?? res.message);
-    }
-    return res;
+  } catch (e) {
+    print('$_kRed Invalid JSON.$_kReset');
   }
 }
 
-class RevaniData {
-  final RevaniClient _client;
-  RevaniData(this._client);
+Future<void> _deleteData(RevaniClient client) async {
+  stdout.write('Bucket: ');
+  final bucket = stdin.readLineSync()?.trim();
+  stdout.write('Tag: ');
+  final tag = stdin.readLineSync()?.trim();
 
-  Future<RevaniResponse> add({
-    required String bucket,
-    required String tag,
-    required Map<String, dynamic> value,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'data/add',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'bucket': bucket,
-        'tag': tag,
-        'value': value,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
+  if (bucket == null || tag == null) return;
 
-  Future<RevaniResponse> addAll({
-    required String bucket,
-    required Map<String, Map<String, dynamic>> items,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'data/add-batch',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'bucket': bucket,
-        'items': items,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> get({
-    required String bucket,
-    required String tag,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'data/get',
-        'projectID': _client.projectID,
-        'bucket': bucket,
-        'tag': tag,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> getAll({
-    required String bucket,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'data/get-all', 'projectID': _client.projectID, 'bucket': bucket},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> query({
-    required String bucket,
-    required Map<String, dynamic> query,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'data/query',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'bucket': bucket,
-        'query': query,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> update({
-    required String bucket,
-    required String tag,
-    required dynamic newValue,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'data/update',
-        'projectID': _client.projectID,
-        'bucket': bucket,
-        'tag': tag,
-        'newValue': newValue,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> delete({
-    required String bucket,
-    required String tag,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'data/delete',
-        'projectID': _client.projectID,
-        'bucket': bucket,
-        'tag': tag,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> deleteAll({
-    required String bucket,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'data/delete-all',
-        'projectID': _client.projectID,
-        'bucket': bucket,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-}
-
-class RevaniUser {
-  final RevaniClient _client;
-  RevaniUser(this._client);
-
-  Future<RevaniResponse> register({
-    required String email,
-    required String password,
-    String? name,
-    String? bio,
-    int? age,
-    String? profilePhoto,
-    String? deviceId,
-    String? deviceOs,
-    Map<String, dynamic>? customData,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    final userData = {
-      'email': email,
-      'password': password,
-      'name': name,
-      'bio': bio,
-      'age': age,
-      'profile_photo': profilePhoto,
-      'device_id': deviceId,
-      'device_os': deviceOs,
-      'data': customData,
-    };
-    return await _client.execute(
-      {
-        'cmd': 'user/register',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'userData': userData,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> login(
-    String email,
-    String password, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    final res = await _client.execute(
-      {
-        'cmd': 'user/login',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'email': email,
-        'password': password,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-
-    if (res.isSuccess && res.data['token'] != null) {
-      _client.setSession(res.data['token']);
-      await _client._saveSession();
-    }
-    return res;
-  }
-
-  Future<RevaniResponse> getProfile(
-    String userId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'user/get-profile',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'userId': userId,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> editProfile(
-    String userId,
-    Map<String, dynamic> updates, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'user/edit-profile', 'userId': userId, 'updates': updates},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> changePassword(
-    String userId,
-    String oldPass,
-    String newPass, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'user/change-password',
-        'userId': userId,
-        'oldPass': oldPass,
-        'newPass': newPass,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-}
-
-class RevaniSocial {
-  final RevaniClient _client;
-  RevaniSocial(this._client);
-
-  Future<RevaniResponse> createPost({
-    required String userId,
-    required String text,
-    List<String>? images,
-    String? video,
-    List<String>? documents,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'social/post/create',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'postData': {
-          'user_id': userId,
-          'text': text,
-          'images': images,
-          'video': video,
-          'documents': documents,
-        },
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> getPost(
-    String postId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'social/post/get', 'postId': postId},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> likePost(
-    String postId,
-    String userId,
-    bool isLike, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'social/post/like',
-        'postId': postId,
-        'userId': userId,
-        'isLike': isLike,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> viewPost(
-    String postId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'social/post/view', 'postId': postId},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> addComment(
-    String postId,
-    String userId,
-    String text, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'social/comment/add',
-        'postId': postId,
-        'userId': userId,
-        'text': text,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> getComments(
-    String postId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'social/comment/get', 'postId': postId},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> likeComment(
-    String commentId,
-    String userId,
-    bool isLike, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'social/comment/like',
-        'commentId': commentId,
-        'userId': userId,
-        'isLike': isLike,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-}
-
-class RevaniChat {
-  final RevaniClient _client;
-  RevaniChat(this._client);
-
-  Future<RevaniResponse> create(
-    List<String> participants, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'chat/create',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'participants': participants,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> getList(
-    String userId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'chat/get-list',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'userId': userId,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> delete(
-    String chatId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'chat/delete', 'chatId': chatId},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> sendMessage(
-    String chatId,
-    String senderId,
-    Map<String, dynamic> messageData, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'chat/message/send',
-        'chatId': chatId,
-        'senderId': senderId,
-        'messageData': messageData,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> getMessages(
-    String chatId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'chat/message/list', 'chatId': chatId},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> updateMessage(
-    String messageId,
-    String senderId,
-    String newText, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'chat/message/update',
-        'messageId': messageId,
-        'senderId': senderId,
-        'newText': newText,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> deleteMessage(
-    String messageId,
-    String userId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'chat/message/delete', 'messageId': messageId, 'userId': userId},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> react(
-    String messageId,
-    String userId,
-    String emoji,
-    bool add, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'chat/message/react',
-        'messageId': messageId,
-        'userId': userId,
-        'emoji': emoji,
-        'add': add,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> pinMessage(
-    String messageId,
-    bool pin, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'chat/message/pin', 'messageId': messageId, 'pin': pin},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> getPinned(
-    String chatId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'chat/message/get-pinned', 'chatId': chatId},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-}
-
-class RevaniStorage {
-  final RevaniClient _client;
-  RevaniStorage(this._client);
-
-  Future<RevaniResponse> upload({
-    required String fileName,
-    required List<int> bytes,
-    bool compress = false,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'storage/upload',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'fileName': fileName,
-        'bytes': bytes,
-        'compress': compress,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> download(
-    String fileId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'storage/download',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'fileId': fileId,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> delete(
-    String fileId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'storage/delete',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'fileId': fileId,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-}
-
-class RevaniLivekit {
-  final RevaniClient _client;
-  RevaniLivekit(this._client);
-
-  Future<RevaniResponse> init(
-    String host,
-    String apiKey,
-    String apiSecret, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'livekit/init',
-        'host': host,
-        'apiKey': apiKey,
-        'apiSecret': apiSecret,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> autoConnect({
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'livekit/connect',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> createToken({
-    required String roomName,
-    required String userID,
-    required String userName,
-    bool isAdmin = false,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'livekit/create-token',
-        'roomName': roomName,
-        'userID': userID,
-        'userName': userName,
-        'isAdmin': isAdmin,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> createRoom(
-    String roomName, {
-    int timeout = 10,
-    int maxUsers = 50,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'livekit/create-room',
-        'roomName': roomName,
-        'emptyTimeoutMinute': timeout,
-        'maxUsers': maxUsers,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-}
-
-class RevaniPubSub {
-  final RevaniClient _client;
-  RevaniPubSub(this._client);
-
-  Future<RevaniResponse> subscribe(
-    String topic,
-    String clientId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {
-        'cmd': 'pubsub/subscribe',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'clientId': clientId,
-        'topic': topic,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> publish(
-    String topic,
-    Map<String, dynamic> data, [
-    String? clientId,
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  ]) async {
-    return await _client.execute(
-      {
-        'cmd': 'pubsub/publish',
-        'accountID': _client.accountID,
-        'projectName': _client.projectName,
-        'topic': topic,
-        'data': data,
-        'clientId': clientId,
-      },
-      onSuccess: onSuccess,
-      onError: onError,
-    );
-  }
-
-  Future<RevaniResponse> unsubscribe(
-    String topic,
-    String clientId, {
-    Function(dynamic)? onSuccess,
-    Function(String)? onError,
-  }) async {
-    return await _client.execute(
-      {'cmd': 'pubsub/unsubscribe', 'clientId': clientId, 'topic': topic},
-      onSuccess: onSuccess,
-      onError: onError,
-    );
+  final res = await client.data.delete(bucket: bucket, tag: tag);
+  if (res.isSuccess) {
+    print('$_kGreen Data deleted.$_kReset');
+  } else {
+    print('$_kRed Error: ${res.message}$_kReset');
   }
 }
