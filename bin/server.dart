@@ -37,17 +37,30 @@ void main(List<String> args) async {
   final dbServer = RequestDispatcher(db, rateLimiter: rateLimiterClient);
   dbServer.rebuildAllIndices();
   final mainReceivePort = ReceivePort();
+
+  SecurityContext? securityContext;
+  if (RevaniConfig.sslEnabled) {
+    securityContext = SecurityContext.defaultContext;
+    securityContext.useCertificateChain(RevaniConfig.certPath);
+    securityContext.usePrivateKey(RevaniConfig.keyPath);
+  }
+
   final restHandler = const Pipeline()
       .addMiddleware(logRequests())
       .addHandler((Request request) => _handleRestRequests(request, dbServer));
+
   final restPort = RevaniConfig.port + 1;
   final restServer = await shelf_io.serve(
     restHandler,
     '0.0.0.0',
     restPort,
     shared: true,
+    securityContext: securityContext,
   );
-  print('[+] HTTP Side-Kitchen is open on port $restPort');
+
+  print(
+    '[+] HTTP Side-Kitchen is open on port $restPort ${RevaniConfig.sslEnabled ? "(SSL)" : ""}',
+  );
   final workersCount = RevaniConfig.workerCount;
   print('[&] Waking up $workersCount pastry chefs...');
   for (int i = 0; i < workersCount; i++) {

@@ -94,3 +94,6 @@ Revani has evolved from a NoSQL engine into a comprehensive **Backend-as-a-Servi
 
 ## [2.1.1] - 2026-01-23
 ### Revani client dart updated
+
+## [2.1.2] - 2026-01-23
+### Fix
