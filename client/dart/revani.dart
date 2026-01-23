@@ -261,6 +261,7 @@ class RevaniClient {
     _sessionKey = null;
     _accountID = null;
     _socket?.destroy();
+    _socket = null;
   }
 }
 
@@ -297,20 +298,26 @@ class RevaniAccount {
       'email': email,
       'password': password,
     }, useEncryption: false);
-    if (res.isSuccess) {
-      _client.setSession(res.data['session_key'] ?? res.data);
+
+    if (res.isSuccess &&
+        res.data is Map &&
+        res.data.containsKey('session_key')) {
+      _client.setSession(res.data['session_key']);
+
       final idRes = await _client.execute({
         'cmd': 'account/get-id',
         'email': email,
         'password': password,
-      });
-      if (idRes.isSuccess) {
+      }, useEncryption: false);
+
+      if (idRes.isSuccess && idRes.data is Map) {
         _client.setAccount(idRes.data['id']);
         if (onSuccess != null) onSuccess(idRes.data);
+        return idRes;
       }
-    } else {
-      if (onError != null) onError(res.error ?? res.message);
     }
+
+    if (onError != null) onError(res.error ?? res.message);
     return res;
   }
 }

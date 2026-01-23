@@ -1,10 +1,3 @@
-/*
- * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
- * This project is part of Revani
- * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
- * See the LICENSE file in the project root for full license information.
- * For commercial licensing, please contact: JeaFriday
- */
 import 'dart:io';
 import 'dart:async';
 import 'package:args/args.dart';
@@ -77,7 +70,7 @@ Future<void> _authMenu(RevaniClient client) async {
 }
 
 Future<void> _register(RevaniClient client) async {
-  print('\n$_kBold--- CREATE ADMIN ACCOUNT ---$_kReset');
+  print('\n$_kBold--- CREATE ACCOUNT ---$_kReset');
   stdout.write('Email: ');
   final email = stdin.readLineSync()?.trim() ?? '';
   stdout.write('Password: ');
@@ -86,16 +79,12 @@ Future<void> _register(RevaniClient client) async {
   stdin.echoMode = true;
   print('');
 
-  final res = await client.account.create(
-    email,
-    password,
-    data: {'role': 'root'},
-  );
+  final res = await client.account.create(email, password);
 
   if (res.isSuccess) {
-    print('$_kGreen Account created. Now try to login.$_kReset');
+    print('$_kGreen ${res.message}. Now try to login.$_kReset');
   } else {
-    print('$_kRed Registration failed: ${res.message}$_kReset');
+    print('$_kRed Registration failed: ${res.error ?? res.message}$_kReset');
   }
 }
 
@@ -116,13 +105,13 @@ Future<bool> _login(RevaniClient client) async {
         'accountID': client.accountID,
       });
 
-      if (checkRole.status == 401) {
-        print('$_kYellow[WARNING] Login success but not an admin yet.$_kReset');
-        print('Check your server logs to promote this ID: ${client.accountID}');
+      if (checkRole.status != 200) {
+        print('$_kYellow[WARNING] Login success but no admin access.$_kReset');
+        print('Message: ${checkRole.message}');
         return true;
       }
 
-      print('$_kGreen Login Successful.$_kReset');
+      print('$_kGreen Login Successful. Welcome Admin.$_kReset');
       return true;
     } else {
       print('$_kRed Access Denied: ${res.message}$_kReset');
@@ -135,15 +124,17 @@ Future<bool> _login(RevaniClient client) async {
 }
 
 Future<void> _userLoop(RevaniClient client) async {
-  String? activeProject;
   while (true) {
     print('\n$_kBold=== DASHBOARD (${client.accountID}) ===$_kReset');
     print('1. Create Project  2. Select Project  0. Logout');
     stdout.write('${_kYellow}console> $_kReset');
     final choice = stdin.readLineSync()?.trim();
-    if (choice == '0') break;
+    if (choice == '0') {
+      client.logout();
+      break;
+    }
     if (choice == '1') await _createProject(client);
-    if (choice == '2') activeProject = await _selectProject(client);
+    if (choice == '2') await _selectProject(client);
   }
 }
 
@@ -159,10 +150,16 @@ Future<void> _createProject(RevaniClient client) async {
   );
 }
 
-Future<String?> _selectProject(RevaniClient client) async {
+Future<void> _selectProject(RevaniClient client) async {
   stdout.write('Project Name: ');
   final name = stdin.readLineSync()?.trim();
-  if (name == null || name.isEmpty) return null;
+  if (name == null || name.isEmpty) return;
   final res = await client.project.use(name);
-  return res.isSuccess ? name : null;
+  if (res.isSuccess) {
+    print(
+      '$_kGreen Project "${res.data['name']}" active. ID: ${res.data['id']}$_kReset',
+    );
+  } else {
+    print('$_kRed Error: ${res.message}$_kReset');
+  }
 }

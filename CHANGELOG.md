@@ -85,3 +85,6 @@ Revani has evolved from a NoSQL engine into a comprehensive **Backend-as-a-Servi
 - The `execute` method now returns a `RevaniResponse` object.
 - The `login` function now returns a `RevaniResponse` instead of a `bool`, providing detailed failure reasons.
 - Storage-related commands are now handled via HTTP endpoints instead of the TCP `execute` command.
+
+## [2.0.1] - 2026-01-23
+### Fix
