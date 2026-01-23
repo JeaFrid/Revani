@@ -1,16 +1,9 @@
-/*
- * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
- * * This project is part of Revani
- * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
- * See the LICENSE file in the project root for full license information.
- * * For commercial licensing, please contact: JeaFriday
- */
-
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
 import 'package:args/args.dart';
 import '../client/dart/revani.dart';
+
 const String _kReset = '\x1B[0m';
 const String _kBold = '\x1B[1m';
 const String _kRed = '\x1B[31m';
@@ -21,14 +14,9 @@ const String _kMagenta = '\x1B[35m';
 
 void main(List<String> arguments) async {
   final parser = ArgParser()
-    ..addFlag(
-      'local',
-      abbr: 'l',
-      help: 'Connect to localhost:16897',
-      defaultsTo: false,
-    )
-    ..addOption('host', abbr: 'h', help: 'Server Host')
-    ..addOption('port', abbr: 'p', help: 'Server Port');
+    ..addFlag('local', abbr: 'l', defaultsTo: false)
+    ..addOption('host', abbr: 'h')
+    ..addOption('port', abbr: 'p');
 
   ArgResults argResults = parser.parse(arguments);
 
@@ -38,11 +26,11 @@ void main(List<String> arguments) async {
   print(
     _kMagenta +
         r'''
-    ____                      _   
-   / __ \___ _   ______ _____(_)  
-  / /_/ / _ \ | / / __ `/ __ \ /  
- / _, _/  __/ |/ / /_/ / / / / /  
-/_/ |_|\___/|___/\__,_/_/ /_/_/   
+    ____                      _    
+   / __ \___ _  ______ _____(_)   
+  / /_/ / _ \ | / / __ `/ __ \ /   
+ / _, _/  __/ |/ / /_/ / / / / /   
+/_/ |_|\___/|___/\__,_/_/ /_/_/    
            CONSOLE
 ''' +
         _kReset,
@@ -78,7 +66,6 @@ void main(List<String> arguments) async {
     print('$_kGreen Connected.$_kReset');
   } catch (e) {
     print('$_kRed Connection failed: $e$_kReset');
-    print('Hint: Use --local if running locally, or check SSL certs.');
     exit(1);
   }
 
@@ -89,6 +76,11 @@ void main(List<String> arguments) async {
 
 Future<bool> _authenticate(RevaniClient client) async {
   print('\n$_kBold=== USER LOGIN ===$_kReset');
+
+  if (client.isSignedIn) {
+    print('$_kGreen Session restored from local storage.$_kReset');
+    return true;
+  }
 
   while (true) {
     stdout.write('Email: ');
@@ -106,28 +98,28 @@ Future<bool> _authenticate(RevaniClient client) async {
     }
 
     try {
-      final success = await client.account.login(email, password);
-      if (success) {
+      final response = await client.account.login(email, password);
+      if (response.isSuccess) {
         final checkRole = await client.execute({
           'cmd': 'admin/stats/full',
           'accountID': client.accountID,
         });
 
-        if (checkRole['status'] == 200) {
+        if (checkRole.isSuccess) {
           print(
             '$_kRed\n[ACCESS DENIED] This account has Administrator privileges.',
           );
           print(
             'Please use the "Executive Console" for admin operations.$_kReset',
           );
-          client.disconnect();
+          client.logout();
           exit(0);
         }
 
         print('$_kGreen Login Successful. Welcome, User.$_kReset');
         return true;
       } else {
-        print('${_kRed}Access Denied. Wrong email or password.$_kReset');
+        print('${_kRed}Access Denied: ${response.message}$_kReset');
       }
     } catch (e) {
       print('${_kRed}Login Error: $e$_kReset');
@@ -186,7 +178,7 @@ Future<void> _userLoop(RevaniClient client) async {
           break;
         case '0':
           print('Goodbye.');
-          client.disconnect();
+          client.logout();
           exit(0);
         default:
           print('Invalid option.');
@@ -203,10 +195,10 @@ Future<void> _createProject(RevaniClient client) async {
   if (name == null || name.isEmpty) return;
 
   final res = await client.project.create(name);
-  if (res['status'] == 200) {
+  if (res.isSuccess) {
     print('$_kGreen Project "$name" created successfully.$_kReset');
   } else {
-    print('$_kRed Error: ${res['error'] ?? res['message']}$_kReset');
+    print('$_kRed Error: ${res.error ?? res.message}$_kReset');
   }
 }
 
@@ -216,11 +208,11 @@ Future<String?> _selectProject(RevaniClient client) async {
   if (name == null || name.isEmpty) return null;
 
   final res = await client.project.use(name);
-  if (res['status'] == 200) {
+  if (res.isSuccess) {
     print('$_kGreen Project selected.$_kReset');
     return name;
   } else {
-    print('$_kRed Project not found or access denied.$_kReset');
+    print('$_kRed Project not found or access denied.${res.message}$_kReset');
     return null;
   }
 }
@@ -240,10 +232,10 @@ Future<void> _addData(RevaniClient client) async {
   try {
     final Map<String, dynamic> value = jsonDecode(jsonStr);
     final res = await client.data.add(bucket: bucket, tag: tag, value: value);
-    if (res['status'] == 200) {
+    if (res.isSuccess) {
       print('$_kGreen Data saved.$_kReset');
     } else {
-      print('$_kRed Error: ${res['message']}$_kReset');
+      print('$_kRed Error: ${res.message}$_kReset');
     }
   } catch (e) {
     print('$_kRed Invalid JSON format.$_kReset');
@@ -259,12 +251,12 @@ Future<void> _getData(RevaniClient client) async {
   if (bucket == null || tag == null) return;
 
   final res = await client.data.get(bucket: bucket, tag: tag);
-  if (res['status'] == 200) {
+  if (res.isSuccess) {
     print('\n$_kCyan--- DATA ---$_kReset');
-    print(JsonEncoder.withIndent('  ').convert(res['data']));
+    print(JsonEncoder.withIndent('  ').convert(res.data));
     print('$_kCyan------------$_kReset\n');
   } else {
-    print('$_kRed Data not found.$_kReset');
+    print('$_kRed Data not found.${res.message}$_kReset');
   }
 }
 
@@ -283,15 +275,15 @@ Future<void> _queryData(RevaniClient client) async {
     final qJson = jsonDecode(qStr);
     final res = await client.data.query(bucket: bucket, query: qJson);
 
-    if (res['status'] == 200) {
-      final list = res['data'] as List;
+    if (res.isSuccess) {
+      final list = res.data as List;
       print('\n$_kGreen Found ${list.length} records:$_kReset');
       for (var item in list) {
         print(JsonEncoder.withIndent('  ').convert(item));
         print('-');
       }
     } else {
-      print('$_kRed Query failed: ${res['message']}$_kReset');
+      print('$_kRed Query failed: ${res.message}$_kReset');
     }
   } catch (e) {
     print('$_kRed Invalid JSON.$_kReset');
@@ -315,10 +307,10 @@ Future<void> _updateData(RevaniClient client) async {
       tag: tag,
       newValue: val,
     );
-    if (res['status'] == 200) {
+    if (res.isSuccess) {
       print('$_kGreen Data updated.$_kReset');
     } else {
-      print('$_kRed Error: ${res['message']}$_kReset');
+      print('$_kRed Error: ${res.message}$_kReset');
     }
   } catch (e) {
     print('$_kRed Invalid JSON.$_kReset');
@@ -334,9 +326,9 @@ Future<void> _deleteData(RevaniClient client) async {
   if (bucket == null || tag == null) return;
 
   final res = await client.data.delete(bucket: bucket, tag: tag);
-  if (res['status'] == 200) {
+  if (res.isSuccess) {
     print('$_kGreen Data deleted.$_kReset');
   } else {
-    print('$_kRed Error: ${res['message']}$_kReset');
+    print('$_kRed Error: ${res.message}$_kReset');
   }
 }

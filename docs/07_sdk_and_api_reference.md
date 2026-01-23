@@ -1,133 +1,94 @@
-# 📚 SDK and API Reference Guide
+# SDK and API Reference Guide (v2.0.0>)
 
-Revani uses a standardized protocol across all clients. The structures, method names, and parameters explained here using the Dart SDK are identical across Python, PHP, and other Revani libraries.
+This document provides a technical overview of the Revani SDK for Dart. As of version 2.0.0, the SDK utilizes a type-safe response model and a hybrid communication architecture (TCP for stateful operations, HTTP for stateless file streaming).
 
-## 1. Introduction: RevaniClient Structure
-All your interactions with Revani begin with the `RevaniClient` class. This class automatically manages the TCP connection to the server, the handshake process, and the encrypted packet traffic.
+## 1. Core Architecture: RevaniClient
 
-### Establishing a Connection
-To connect to the server, simply provide the host and port information. The `secure` parameter determines whether the TLS/SSL layer is active.
+All interactions with the Revani ecosystem are orchestrated via the `RevaniClient` class. This class manages persistent TCP connections, session negotiation, and automatic reconnection logic.
+
+### Initialization and Connectivity
 
 ```dart
 final client = RevaniClient(
-  host: '127.0.0.1', 
-  port: 16897, 
-  secure: true
+  host: '127.0.0.1',
+  port: 16897,
+  secure: true, // Enables TLS/SSL
+  autoReconnect: true
 );
 
 await client.connect();
 ```
 
----
+## 2. Standardized Response Model (RevaniResponse)
 
-## 2. Account and Authentication (RevaniAccount)
-In Revani, every operation is tied to an account and a project. For security, all traffic except for `create` and `login` methods flows under heavy encryption.
+Version 2.0.0 introduces the `RevaniResponse` object, replacing raw dictionary outputs. This ensures consistent error handling and status code verification across all modules.
 
-### Account Creation and Login
-```dart
-// Create a new account (One-time)
-await client.account.create("admin@revani.com", "strong_password");
+| Property | Type | Description |
+| :--- | :--- | :--- |
+| `status` | int | Standard HTTP status code (200, 401, 403, etc.) |
+| `isSuccess` | bool | Returns true if status is within the 200-299 range |
+| `data` | dynamic | The primary payload returned by the server |
+| `message` | String | Human-readable response or system message |
+| `error` | String? | Technical error description if applicable |
 
-// Log in (Handshake and Session Key retrieval happen automatically)
-bool success = await client.account.login("admin@revani.com", "strong_password");
-```
-*Note: Once login is successful, the `session_key` is automatically set, and all subsequent requests are armored with AES-GCM.*
+## 3. Account and Session Management
 
----
-
-## 3. Project Management (RevaniProject)
-Revani features a **Multi-Tenant** architecture. Data is isolated under specific projects.
+Authentication now produces a short-lived, dynamically renewed token.
 
 ```dart
-// Create a new project
-await client.project.create("SmartHome_System");
-
-// Activate an existing project
-await client.project.use("SmartHome_System");
-```
-
----
-
-## 4. NoSQL Data Operations (RevaniData)
-The heart of Revani, the NoSQL RevaniEngine, operates on a `bucket`, `tag`, and `value` hierarchy.
-
-### Adding and Updating Data
-```dart
-await client.data.add(
-  bucket: "sensor_data",
-  tag: "livingroom_temp",
-  value: {"temp": 24.5, "unit": "C"}
+// Account Registration
+await client.account.create(
+  "user@example.com", 
+  "secure_password",
+  onSuccess: (data) => print("Account created: $data"),
+  onError: (error) => print("Registration failed: $error")
 );
 
-await client.data.update(
-  bucket: "sensor_data",
-  tag: "livingroom_temp",
-  newValue: {"temp": 22.0}
-);
+// Authentication and Token Acquisition
+RevaniResponse loginRes = await client.account.login("user@example.com", "password");
+
+if (loginRes.isSuccess) {
+  print("Authenticated with Token: ${client.isSignedIn}");
+}
 ```
 
-### Reading and Querying Data
-```dart
-// Retrieve single data entry
-var res = await client.data.get(bucket: "sensor_data", tag: "livingroom_temp");
+## 4. NoSQL Data Operations
 
-// Advanced querying
-var queryRes = await client.data.query(
-  bucket: "sensor_data",
-  query: {"temp": {"$gt": 20}} // Get values greater than 20
+Data operations are executed via the stateful TCP pipeline.
+
+```dart
+// Atomic Write Operation
+RevaniResponse addRes = await client.data.add(
+  bucket: "inventory",
+  tag: "item_001",
+  value: {"stock": 150, "location": "Warehouse A"}
+);
+
+// Advanced Query Execution
+RevaniResponse queryRes = await client.data.query(
+  bucket: "inventory",
+  query: {
+    "where": [{"field": "stock", "op": ">", "value": 100}]
+  }
 );
 ```
 
----
+## 5. Storage and Media Management (HTTP Layer)
 
-## 5. Object Storage (RevaniStorage)
-Allows you to store your files on disk in an encrypted and optimized manner.
+Unlike database operations, storage commands (upload/download) are processed through the HTTP Side-Kitchen layer to optimize throughput.
 
 ```dart
-// Upload a file
+// File Ingestion via HTTP POST
 await client.storage.upload(
-  fileName: "profile_photo.jpg",
+  fileName: "document.pdf",
   bytes: fileBytes,
-  compress: true // Automatic image optimization
+  compress: false,
+  onSuccess: (data) => print("File ID: ${data['file_id']}")
 );
 
-// Download a file
-var file = await client.storage.download("file_id_here");
-```
-
----
-
-## 6. Real-Time Services (Livekit & PubSub)
-Revani is more than just a database; it is a communication bridge.
-
-### PubSub (Publish/Subscribe)
-Used for instant messaging or event-driven systems.
-```dart
-// Subscribe to a topic
-await client.pubsub.subscribe("home_alarm", "client_id_01");
-
-// Publish a message to the topic
-await client.pubsub.publish("home_alarm", {"status": "triggered"});
-```
-
-### Livekit Integration
-Secures the management of audio and video rooms on the server side.
-```dart
-await client.livekit.createRoom("Meeting_Room_1");
-var token = await client.livekit.createToken(
-  roomName: "Meeting_Room_1",
-  userID: "user_123",
-  userName: "JeaFriday"
+// File Retrieval via HTTP GET
+await client.storage.download(
+  "file_id_string",
+  onSuccess: (data) => saveToFile(data['bytes'])
 );
 ```
-
----
-
-## 🛡️ Security Note: Protocol Compliance
-Regardless of the language you use (Python, PHP, C#, etc.), Revani SDKs implement the following standards in the background:
-1.  **Frame Header:** Each packet starts with a 4-byte (Uint32) length information.
-2.  **Encryption:** Uses AES-GCM encryption in the format `salt:iv:ciphertext`.
-3.  **Timestamp:** Every encrypted packet contains a `ts` (timestamp) for Replay Attack protection.
-
----
-The continuation of this documentation can be found in the *08_endpoint_reference.md* file.

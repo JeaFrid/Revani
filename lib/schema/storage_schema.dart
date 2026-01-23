@@ -1,10 +1,3 @@
-/*
- * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
- * * This project is part of Revani
- * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
- * See the LICENSE file in the project root for full license information.
- * * For commercial licensing, please contact: JeaFriday
- */
 import 'dart:typed_data';
 import 'package:revani/config.dart';
 import 'package:revani/schema/data_schema.dart';
@@ -18,20 +11,16 @@ import 'package:path/path.dart' as p;
 class StorageSchema {
   static const String collectionTag = "storage_meta";
   static const String storageIndexTag = "idx_storage_file";
-
   final Uuid uuid = const Uuid();
   final RevaniDatabase db;
   final RevaniStorageCore core;
   final DataSchemaProject projectSchema;
-
   StorageSchema(this.db)
-      : core = RevaniStorageCore(),
-        projectSchema = DataSchemaProject(db);
-
+    : core = RevaniStorageCore(),
+      projectSchema = DataSchemaProject(db);
   void rebuildIndices() {
     final files = db.getAll(collectionTag);
     if (files == null) return;
-
     for (var f in files) {
       final id = f.value['id'];
       if (id != null) {
@@ -48,7 +37,6 @@ class StorageSchema {
     bool compressImage = false,
   }) async {
     final projectID = await projectSchema.existProject(accountID, projectName);
-
     if (projectID == null) {
       return DataResponse(
         message: "Project not found",
@@ -130,7 +118,6 @@ class StorageSchema {
     String fileId,
   ) async {
     final projectID = await projectSchema.existProject(accountID, projectName);
-
     if (projectID == null) {
       return DataResponse(
         message: "Project not found",
@@ -173,7 +160,6 @@ class StorageSchema {
     String fileId,
   ) async {
     final projectID = await projectSchema.existProject(accountID, projectName);
-
     if (projectID == null) {
       return DataResponse(
         message: "Project not found",

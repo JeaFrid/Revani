@@ -34,6 +34,7 @@ class RevaniConfig {
   static const String dbPath = 'revani.db';
   static const Duration compactionInterval = Duration(minutes: 10);
   static const Duration flushInterval = Duration(milliseconds: 200);
+  static const Duration tokenHotTtl = Duration(minutes: 30);
   static const int maxRamUsageMB = 8000;
   static const String storagePath = 'storage';
   static const int maxFileSizeMB = 50;

@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:revani/config.dart';
 import 'package:revani/core/database_engine.dart';
-import 'package:revani/core/query_engine.dart';
 import 'package:revani/model/print.dart';
 import 'package:revani/tools/tokener.dart';
 import 'package:uuid/uuid.dart';
@@ -84,7 +83,9 @@ class DataSchemaAccount {
   final Uuid uuid = const Uuid();
   final RevaniDatabase db;
   final JeaTokener tokener;
-  DataSchemaAccount(this.db, this.tokener);
+  final DataSchemaSession sessionSchema;
+  DataSchemaAccount(this.db, this.tokener)
+    : sessionSchema = DataSchemaSession(db);
   void rebuildIndices() {
     final users = db.getAll(collectionTag);
     if (users == null) return;
@@ -166,11 +167,16 @@ class DataSchemaAccount {
       final bool isValid = tokener.verifyPassword(password, storedHash);
 
       if (isValid) {
+        final token = await sessionSchema.createSession(
+          targetId,
+          null,
+          'account',
+        );
         return DataResponse(
           message: "ID found.",
           error: "",
           status: StatusCodes.ok,
-          data: {"id": item.tag, "email": email},
+          data: {"id": item.tag, "email": email, "token": token},
         );
       }
     }
@@ -548,7 +554,10 @@ class DataSchemaUser {
   final JeaTokener tokener;
   final DataSchemaProject projectSchema;
   final Uuid uuid = const Uuid();
-  DataSchemaUser(this.db, this.tokener) : projectSchema = DataSchemaProject(db);
+  final DataSchemaSession sessionSchema;
+  DataSchemaUser(this.db, this.tokener)
+    : projectSchema = DataSchemaProject(db),
+      sessionSchema = DataSchemaSession(db);
   void rebuildIndices() {
     final users = db.getAll(collectionTag);
     if (users == null) return;
@@ -664,6 +673,10 @@ class DataSchemaUser {
     if (tokener.verifyPassword(password, storedHash)) {
       final safeProfile = Map<String, dynamic>.from(data.value);
       safeProfile.remove('password_hash');
+
+      final token = await sessionSchema.createSession(userId, pId, 'user');
+      safeProfile['token'] = token;
+
       return DataResponse(
         message: "Login successful",
         error: "",
@@ -777,6 +790,72 @@ class DataSchemaUser {
       message: "Password changed",
       error: "",
       status: StatusCodes.ok,
+    );
+  }
+}
+
+class DataSchemaSession {
+  static const String collectionTag = "sys_sessions";
+  final RevaniDatabase db;
+  final Uuid uuid = const Uuid();
+
+  DataSchemaSession(this.db);
+  void rebuildIndices() {
+    final sessions = db.getAll(collectionTag);
+    if (sessions == null) return;
+    for (var s in sessions) {
+      final token = s.value['token'];
+      if (token != null) {}
+    }
+  }
+
+  Future<String> createSession(
+    String userId,
+    String? projectId,
+    String type,
+  ) async {
+    final token = uuid.v4();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final expiresAt = now + RevaniConfig.tokenHotTtl.inMilliseconds;
+
+    final sessionData = {
+      "token": token,
+      "user_id": userId,
+      "project_id": projectId,
+      "type": type,
+      "created_at": now,
+      "expires_at": expiresAt,
+    };
+
+    db.add(collectionTag, token, sessionData, ttl: RevaniConfig.tokenHotTtl);
+
+    return token;
+  }
+
+  Future<DataResponse> verifyToken(String token) async {
+    final session = db.get(collectionTag, token);
+
+    if (session == null) {
+      return DataResponse(
+        message: "",
+        error: "Session expired or invalid",
+        status: StatusCodes.unauthorized,
+      );
+    }
+
+    final data = Map<String, dynamic>.from(session.value);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final newExpiresAt = now + RevaniConfig.tokenHotTtl.inMilliseconds;
+
+    data['expires_at'] = newExpiresAt;
+
+    db.add(collectionTag, token, data, ttl: RevaniConfig.tokenHotTtl);
+
+    return DataResponse(
+      message: "Session verified and heated",
+      error: "",
+      status: StatusCodes.ok,
+      data: data,
     );
   }
 }

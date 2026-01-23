@@ -58,3 +58,30 @@ Revani has evolved from a NoSQL engine into a comprehensive **Backend-as-a-Servi
 - **Schema Consolidation**: Merged `User`, `Social`, and `Messaging` logic into `lib/schema/data_schema.dart` for unified index management.
 - **Dispatcher Routing**: Expanded `processCommand` switch-case to handle new `user/*`, `social/*`, and `chat/*` namespaces.
 - **Dart SDK**: `RevaniClient` now exposes dedicated accessors: `.user`, `.social`, `.chat`, `.data`, `.project`, `.account`.
+
+
+## [2.0.0] - 2026-01-23
+### ⚠️ MAJOR RELEASE / BREAKING CHANGES
+### 🏗️ Hybrid Infrastructure & Architectural Changes
+- **Storage Decoupling**: Migrated all file operations (Upload/Download) from the raw TCP socket layer to a dedicated **HTTP REST API** layer. This prevents large binary transfers from blocking the database command pipeline (Head-of-line blocking).
+- **Side-Kitchen HTTP Server**: Integrated a high-performance HTTP service within `bin/server.dart` to handle stateless file requests and media streaming efficiently.
+
+### 🔐 Security & Identity Management
+- **Token-Based Authentication**: Transitioned from static session keys to a dynamic **Token** system for administrative and user logins.
+- **Session Heating (Hot TTL)**: Implemented an active session management logic where tokens are stored in `sys_sessions` and their expiration is automatically renewed upon each successful verification.
+- **Identity Mismatch Detection**: Added strict cross-verification between the `accountID` provided in encrypted packets and the owner ID of the active session to prevent impersonation attacks.
+
+### 📦 Dart SDK / Client Refactoring
+- **RevaniResponse Modernization**: The SDK now returns a type-safe `RevaniResponse` object instead of raw `Map` data, standardizing status codes and error messaging across the library.
+- **Enhanced Error Handling**: Introduced `SuccessCallback` and `ErrorCallback` types for more declarative and robust asynchronous flow management.
+- **Auto-Reconnect Mechanism**: Added an intelligent reconnection logic featuring an **Exponential Backoff** algorithm to handle unexpected socket disconnections.
+- **Server Time Synchronization**: Implemented `_serverTimeOffset` to calculate the drift between client and server clocks. This ensures millisecond-precision timestamps for Replay Attack protection.
+
+### ⚡ Performance & Optimization
+- **Standardized Status Codes**: Responses now include standardized HTTP-compliant status codes (e.g., 200 OK, 401 Unauthorized, 403 Forbidden) for better debugging.
+- **Optimized Payload Processing**: Refactored the `_onData` buffer logic to handle interleaved encrypted and plain-text packets more reliably.
+
+### ⚠️ Breaking Changes
+- The `execute` method now returns a `RevaniResponse` object.
+- The `login` function now returns a `RevaniResponse` instead of a `bool`, providing detailed failure reasons.
+- Storage-related commands are now handled via HTTP endpoints instead of the TCP `execute` command.

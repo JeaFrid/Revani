@@ -1,11 +1,3 @@
-/*
- * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
- * * This project is part of Revani
- * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
- * See the LICENSE file in the project root for full license information.
- * * For commercial licensing, please contact: JeaFriday
- */
-
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -16,13 +8,11 @@ import 'package:revani/config.dart';
 class RevaniStorageCore {
   final String _baseStoragePath;
   final int _maxFileSize;
-
   RevaniStorageCore()
     : _baseStoragePath = RevaniConfig.storagePath,
       _maxFileSize = RevaniConfig.maxFileSizeMB * 1024 * 1024 {
     _initDirectory();
   }
-
   void _initDirectory() {
     final dir = Directory(_baseStoragePath);
     if (!dir.existsSync()) {
@@ -32,7 +22,6 @@ class RevaniStorageCore {
 
   bool validateFile(String fileName, int fileSize) {
     if (fileSize > _maxFileSize) return false;
-
     final ext = p.extension(fileName).toLowerCase();
     if (!RevaniConfig.allowedExtensions.contains(ext)) return false;
 
@@ -44,7 +33,6 @@ class RevaniStorageCore {
     if (!await projectDir.exists()) {
       await projectDir.create(recursive: true);
     }
-
     final filePath = p.join(projectDir.path, fileId);
     final file = File(filePath);
     return await file.writeAsBytes(data, flush: true);
@@ -53,7 +41,6 @@ class RevaniStorageCore {
   Future<Uint8List?> readFile(String projectID, String fileId) async {
     final filePath = p.join(_baseStoragePath, projectID, fileId);
     final file = File(filePath);
-
     if (await file.exists()) {
       return await file.readAsBytes();
     }
@@ -63,7 +50,6 @@ class RevaniStorageCore {
   Future<void> deleteFile(String projectID, String fileId) async {
     final filePath = p.join(_baseStoragePath, projectID, fileId);
     final file = File(filePath);
-
     if (await file.exists()) {
       await file.delete();
     }
@@ -73,7 +59,6 @@ class RevaniStorageCore {
     try {
       final filePath = p.join(_baseStoragePath, projectID, fileId);
       final file = File(filePath);
-
       if (!await file.exists()) return false;
 
       final bytes = await file.readAsBytes();

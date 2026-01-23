@@ -1,88 +1,57 @@
-# 🔌 Endpoint and Protocol Reference
+# Endpoint and Protocol Reference (v2.0.0>)
 
-This document is prepared for developers who wish to communicate with the Revani server directly via TCP without using an SDK. Revani uses a custom protocol with a binary packet structure instead of a standard HTTP interface to ensure low latency.
+Revani v2.0.0 employs a hybrid communication protocol. Stateful database transactions occur over a binary TCP stream, while stateless media operations utilize a RESTful HTTP interface.
 
-## 1. Communication Protocol (The Wire Format)
-
-When communicating with the Revani server, you must adhere to these three rules:
-1.  **Connection:** Establishing a connection over a TCP socket (Default Port: `16897`).
-2.  **Security:** If the server is in `secure: true` mode, an SSL/TLS handshake is mandatory.
-3.  **Frame Structure:** Every message consists of a "Header" and a "Payload."
+## 1. TCP Protocol Specification (Port: 16897)
 
 ### Frame Structure
-Before sending any message, you must prepend a 4-byte header indicating the size of the payload.
+All TCP packets must be prefixed with a 4-byte header.
 
-| Section | Size | Type | Description |
+1. **Header (4 Bytes):** Uint32 Big Endian, representing the payload length.
+2. **Payload (Variable):** UTF-8 encoded JSON string.
+
+### Encryption Protocol (AES-GCM-256)
+Encrypted envelopes must follow the serialized format: `salt:iv:ciphertext` (all Base64 encoded).
+
+## 2. HTTP Side-Kitchen Specification (Port: 16898)
+
+The HTTP server facilitates high-bandwidth operations and stateless API execution.
+
+### A. File Ingestion (Media Upload)
+**Endpoint:** `POST /upload`  
+**Headers:**
+- `x-account-id`: The unique identifier of the account.
+- `x-project-name`: The target project namespace.
+- `x-file-name`: The original filename (optional).
+
+**Body:** Raw binary data.
+
+### B. File Retrieval (Media Access)
+**Endpoint:** `GET /file/:projectID/:fileID`  
+**Description:** Serves the raw binary content of the specified file. Supports browser caching and CDN integration.
+
+### C. Stateless Command Execution
+**Endpoint:** `POST /api/execute`  
+**Description:** Allows execution of database commands via HTTP for clients unable to maintain a persistent TCP socket.
+**Body:** JSON command payload.
+
+## 3. Command Registry (TCP/HTTP Execute)
+
+| Command (`cmd`) | Namespace | Authorization | Description |
 | :--- | :--- | :--- | :--- |
-| **Header** | 4 Bytes | Uint32 (Big Endian) | The length of the payload in bytes. |
-| **Payload** | Variable | UTF-8 JSON | The actual request or response body. |
+| `auth/verify-token` | Session | Plaintext | Validates and renews an active session token. |
+| `data/add` | Database | Encrypted | Persists an object to the append-only log. |
+| `data/query` | Database | Encrypted | Executes complex filters on a specific bucket. |
+| `user/register` | Identity | Encrypted | Registers an end-user within a project scope. |
+| `admin/system/force-gc` | System | Admin-Only | Manually triggers the Incremental Garbage Collector. |
 
+## 4. Status Code Definitions
 
+Revani uses standardized integer status codes to indicate the outcome of a request:
 
----
-
-## 2. Security Implementation (Encryption Algorithm)
-
-After receiving the `session_key` from the `auth/login` operation, you must armor all your requests.
-
-**Request Packaging Steps:**
-1.  **Create Wrapper:** Place the command you want to send inside this JSON:
-    `{"payload": "COMMAND_JSON_STRING", "ts": TIMESTAMP_MS}`
-2.  **Key Derivation:** Generate a 16-byte random `salt`. Key = `SHA256(session_key + salt_base64)`.
-3.  **Encryption:** Using AES-GCM (256-bit), encrypt the wrapper with a 16-byte random `iv`.
-4.  **Final String:** Construct a string in the format: `salt_base64 : iv_base64 : ciphertext_base64`.
-5.  **Envelope:** The final JSON to be sent to the server: `{"encrypted": "FINAL_STRING"}`.
-
----
-
-## 3. Command (Endpoint) List
-
-All commands are specified using the `cmd` key within the JSON payload.
-
-### A. Account and Authentication
-| Command (`cmd`) | Parameters | Description |
-| :--- | :--- | :--- |
-| `account/create` | `email`, `password`, `data` | Creates a new account (Plaintext). |
-| `auth/login` | `email`, `password` | Returns a `session_key` (Plaintext). |
-| `account/get-id` | `email`, `password` | Returns the account's unique ID. |
-| `account/get-data`| `id` | Retrieves additional account data. |
-
-### B. Project Management
-| Command (`cmd`) | Parameters | Description |
-| :--- | :--- | :--- |
-| `project/create` | `accountID`, `projectName` | Creates a new project and database file. |
-| `project/exist` | `accountID`, `projectName` | Verifies project existence and returns its ID. |
-
-### C. NoSQL Data Operations (RevaniEngine)
-*All parameters must be sent within an encrypted packet.*
-
-| Command (`cmd`) | Key Parameters | Function |
-| :--- | :--- | :--- |
-| `data/add` | `bucket`, `tag`, `value` | Adds new data (Append-only). |
-| `data/get` | `bucket`, `tag`, `projectID` | Retrieves a specific data entry. |
-| `data/update` | `bucket`, `tag`, `newValue` | Updates data (via appending). |
-| `data/delete` | `bucket`, `tag` | Marks data as deleted. |
-| `data/query` | `bucket`, `query` | Executes logical queries ($gt, $lt, etc.). |
-
-### D. Storage and Media (RevaniStorage & Livekit)
-| Command (`cmd`) | Description |
-| :--- | :--- |
-| `storage/upload` | Uploads a file using `bytes` (List<int>) and `fileName`. |
-| `livekit/init` | Configures the Livekit API on the server side. |
-| `livekit/create-token`| Generates an access token for a specific room. |
-| `pubsub/publish` | Publishes data over a specific `topic`. |
-
----
-
-## 4. Status Codes and Response Format
-
-Every response from the server follows a standardized structure:
-```json
-{
-  "status": 200,      // 200: OK, 400: Error, 401: Unauthorized
-  "data": { ... },    // Data returned if the operation is successful
-  "msg": "Description"// Error message in case of failure
-}
-```
-
-> 💡 **Important:** If the server sends an encrypted response, it will arrive as `{"encrypted": "..."}`. You must decrypt this payload on the client side using the same AES-GCM logic.
+- **200 (OK):** Request completed successfully.
+- **201 (Created):** Resource successfully persisted.
+- **401 (Unauthorized):** Invalid credentials or expired token.
+- **403 (Forbidden):** Identity mismatch or insufficient role permissions.
+- **429 (Too Many Requests):** Rate limit exceeded for the current identifier.
+- **500 (Internal Error):** Server-side exception or database corruption.

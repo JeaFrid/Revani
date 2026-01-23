@@ -21,6 +21,7 @@ class RequestDispatcher {
   late final DataSchemaSocial socialSchema;
   late final DataSchemaMessaging messagingSchema;
   late final QuerySchema querySchema;
+  late final DataSchemaSession sessionSchema;
   late final LivekitSchema livekitSchema;
   late final PubSubSchema pubSubSchema;
   late final StorageSchema storageSchema;
@@ -36,6 +37,7 @@ class RequestDispatcher {
     storageSchema = StorageSchema(db);
     pubSubSchema = PubSubSchema(db);
     querySchema = QuerySchema(db);
+    sessionSchema = DataSchemaSession(db);
   }
   void rebuildAllIndices() {
     accountSchema.rebuildIndices();
@@ -43,6 +45,7 @@ class RequestDispatcher {
     dataSchema.rebuildIndices();
     userSchema.rebuildIndices();
     storageSchema.rebuildIndices();
+    sessionSchema.rebuildIndices();
   }
 
   Future<Map<String, dynamic>> processCommand(Map<String, dynamic> req) async {
@@ -55,6 +58,9 @@ class RequestDispatcher {
       }
 
       switch (cmd) {
+        case 'auth/verify-token':
+          res = await sessionSchema.verifyToken(req['token']);
+          break;
         case 'data/query':
           res = await querySchema.queryData(
             req['accountID'],
