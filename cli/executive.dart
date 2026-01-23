@@ -26,9 +26,9 @@ void main(List<String> arguments) async {
     ____                    _   
    / __ \___ _      ______ _____(_)  
   / /_/ / _ \ | / / __ `/ __ \ /  
- / _, _/  __/ |/ / /_/ / / / / /  
-/_/ |_|\___/|___/\__,_/_/ /_/_/   
-            EXECUTIVE
+ / _, _/  __/ |/ / /_/ / / / / /   
+/_/ |_|\___/|___/\__,_/_/ /_/_/    
+           EXECUTIVE
 ''' +
         _kReset,
   );
@@ -58,7 +58,7 @@ Future<void> _authMenu(RevaniClient client) async {
     final choice = stdin.readLineSync()?.trim();
 
     if (choice == '1') {
-      if (await _login(client)) {
+      if (await _manualLogin(client)) {
         await _userLoop(client);
       }
     } else if (choice == '2') {
@@ -88,7 +88,7 @@ Future<void> _register(RevaniClient client) async {
   }
 }
 
-Future<bool> _login(RevaniClient client) async {
+Future<bool> _manualLogin(RevaniClient client) async {
   stdout.write('Email: ');
   final email = stdin.readLineSync()?.trim() ?? '';
   stdout.write('Password: ');
@@ -98,27 +98,28 @@ Future<bool> _login(RevaniClient client) async {
   print('');
 
   try {
-    final res = await client.account.login(email, password);
-    if (res.isSuccess) {
+    final loginRes = await client.account.login(email, password);
+
+    if (loginRes.isSuccess) {
+      print('$_kGreen Login Successful. Session established.$_kReset');
+
       final checkRole = await client.execute({
         'cmd': 'admin/stats/full',
         'accountID': client.accountID,
       });
 
-      if (checkRole.status != 200) {
-        print('$_kYellow[WARNING] Login success but no admin access.$_kReset');
-        print('Message: ${checkRole.message}');
-        return true;
+      if (checkRole.status == 200) {
+        print('$_kGreen Welcome, Administrator.$_kReset');
+      } else {
+        print('$_kYellow[NOTICE] Logged in as User (No admin access).$_kReset');
       }
-
-      print('$_kGreen Login Successful. Welcome Admin.$_kReset');
       return true;
-    } else {
-      print('$_kRed Access Denied: ${res.message}$_kReset');
-      return false;
     }
+
+    print('$_kRed Access Denied: ${loginRes.message}$_kReset');
+    return false;
   } catch (e) {
-    print('$_kRed Error: $e$_kReset');
+    print('$_kRed Error during login: $e$_kReset');
     return false;
   }
 }
@@ -156,9 +157,7 @@ Future<void> _selectProject(RevaniClient client) async {
   if (name == null || name.isEmpty) return;
   final res = await client.project.use(name);
   if (res.isSuccess) {
-    print(
-      '$_kGreen Project "${res.data['name']}" active. ID: ${res.data['id']}$_kReset',
-    );
+    print('$_kGreen Project active.$_kReset');
   } else {
     print('$_kRed Error: ${res.message}$_kReset');
   }

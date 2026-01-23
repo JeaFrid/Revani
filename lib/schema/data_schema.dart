@@ -75,6 +75,12 @@ class DataSchemaProject {
     final String compositeKey = "${accountID}_$projectName";
     return db.getIdByIndex(projectIndexTag, compositeKey);
   }
+
+  Future<bool> isOwner(String accountID, String projectID) async {
+    final project = db.get(collectionTag, projectID);
+    if (project == null) return false;
+    return project.value['owner'] == accountID;
+  }
 }
 
 class DataSchemaAccount {
@@ -383,7 +389,21 @@ class DataSchemaData {
     );
   }
 
-  Future<DataResponse> get(String projectID, String bucket, String tag) async {
+  Future<DataResponse> get(
+    String accountID,
+    String projectID,
+    String bucket,
+    String tag,
+  ) async {
+    final projectSchema = DataSchemaProject(db);
+    if (!(await projectSchema.isOwner(accountID, projectID))) {
+      return DataResponse(
+        message: "Access Denied",
+        error: "Identity Mismatch",
+        status: StatusCodes.forbidden,
+      );
+    }
+
     final String compositeKey = generateCompositeKey(projectID, bucket, tag);
     final String? targetId = db.getIdByIndex(dataIndexTag, compositeKey);
     if (targetId == null) {
@@ -416,7 +436,20 @@ class DataSchemaData {
     );
   }
 
-  Future<DataResponse> getAll(String projectID, String bucket) async {
+  Future<DataResponse> getAll(
+    String accountID,
+    String projectID,
+    String bucket,
+  ) async {
+    final projectSchema = DataSchemaProject(db);
+    if (!(await projectSchema.isOwner(accountID, projectID))) {
+      return DataResponse(
+        message: "Access Denied",
+        error: "Identity Mismatch",
+        status: StatusCodes.forbidden,
+      );
+    }
+
     final allData = db.getAll(collectionTag);
     if (allData == null) {
       return DataResponse(
@@ -460,10 +493,20 @@ class DataSchemaData {
   }
 
   Future<DataResponse> delete(
+    String accountID,
     String projectID,
     String bucket,
     String tag,
   ) async {
+    final projectSchema = DataSchemaProject(db);
+    if (!(await projectSchema.isOwner(accountID, projectID))) {
+      return DataResponse(
+        message: "Access Denied",
+        error: "Identity Mismatch",
+        status: StatusCodes.forbidden,
+      );
+    }
+
     final String compositeKey = generateCompositeKey(projectID, bucket, tag);
     final String? targetId = db.getIdByIndex(dataIndexTag, compositeKey);
     if (targetId == null) {
@@ -480,7 +523,20 @@ class DataSchemaData {
     return DataResponse(message: "Deleted.", error: "", status: StatusCodes.ok);
   }
 
-  Future<DataResponse> deleteAll(String projectID, String bucket) async {
+  Future<DataResponse> deleteAll(
+    String accountID,
+    String projectID,
+    String bucket,
+  ) async {
+    final projectSchema = DataSchemaProject(db);
+    if (!(await projectSchema.isOwner(accountID, projectID))) {
+      return DataResponse(
+        message: "Access Denied",
+        error: "Identity Mismatch",
+        status: StatusCodes.forbidden,
+      );
+    }
+
     final allData = db.getAll(collectionTag);
     if (allData == null) {
       return DataResponse(
@@ -512,11 +568,21 @@ class DataSchemaData {
   }
 
   Future<DataResponse> update(
+    String accountID,
     String projectID,
     String bucket,
     String tag,
     dynamic newValue,
   ) async {
+    final projectSchema = DataSchemaProject(db);
+    if (!(await projectSchema.isOwner(accountID, projectID))) {
+      return DataResponse(
+        message: "Access Denied",
+        error: "Identity Mismatch",
+        status: StatusCodes.forbidden,
+      );
+    }
+
     final String compositeKey = generateCompositeKey(projectID, bucket, tag);
     final String? targetId = db.getIdByIndex(dataIndexTag, compositeKey);
     if (targetId == null) {

@@ -88,3 +88,6 @@ Revani has evolved from a NoSQL engine into a comprehensive **Backend-as-a-Servi
 
 ## [2.0.1] - 2026-01-23
 ### Fix
+
+## [2.1.0] - 2026-01-23
+### Security and improvements.

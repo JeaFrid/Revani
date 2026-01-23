@@ -50,6 +50,8 @@ class RequestDispatcher {
 
   Future<Map<String, dynamic>> processCommand(Map<String, dynamic> req) async {
     final cmd = req['cmd'];
+    final requesterAccountID = req['accountID'];
+
     try {
       DataResponse? res;
 
@@ -147,16 +149,22 @@ class RequestDispatcher {
           break;
         case 'data/get':
           res = await dataSchema.get(
+            requesterAccountID,
             req['projectID'],
             req['bucket'],
             req['tag'],
           );
           break;
         case 'data/get-all':
-          res = await dataSchema.getAll(req['projectID'], req['bucket']);
+          res = await dataSchema.getAll(
+            requesterAccountID,
+            req['projectID'],
+            req['bucket'],
+          );
           break;
         case 'data/update':
           res = await dataSchema.update(
+            requesterAccountID,
             req['projectID'],
             req['bucket'],
             req['tag'],
@@ -165,13 +173,18 @@ class RequestDispatcher {
           break;
         case 'data/delete':
           res = await dataSchema.delete(
+            requesterAccountID,
             req['projectID'],
             req['bucket'],
             req['tag'],
           );
           break;
         case 'data/delete-all':
-          res = await dataSchema.deleteAll(req['projectID'], req['bucket']);
+          res = await dataSchema.deleteAll(
+            requesterAccountID,
+            req['projectID'],
+            req['bucket'],
+          );
           break;
         case 'storage/upload':
           List<int> fileData;
