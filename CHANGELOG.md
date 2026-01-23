@@ -97,3 +97,26 @@ Revani has evolved from a NoSQL engine into a comprehensive **Backend-as-a-Servi
 
 ## [2.1.2] - 2026-01-23
 ### Fix
+
+## [3.0.0] - 2026-01-23
+
+### 🚀 Major Feature: AOT Performance & Identity Shield
+This version marks a significant milestone with the transition from JIT (Just-In-Time) execution to native **Ahead-Of-Time (AOT)** compilation, paired with advanced identity protection mechanisms.
+
+### Added
+- **Native Binary Packaging**: The `server/run.dart` manager now automatically compiles the server into a native executable (`server.exe`) before launch. This ensures maximum hardware utilization and eliminates VM warm-up latency.
+- **Identity Theft Protection**: Implemented a strict verification layer that cross-checks the `accountID` within encrypted data packets against the `sessionOwnerID` of the active token.
+- **Guaranteed Storage Flow**: Storage operations have been hardened with advanced error catching and asynchronous file-locking checks, ensuring 100% data integrity during transfers.
+
+### Performance & Optimization
+- **Turbocharged Security Layers**: The AES-GCM 256-bit encryption and decryption pipelines have been refactored for the AOT environment, delivering near-instant throughput for stateful database commands.
+- **High-Speed Login**: Optimized the Argon2id hashing parameters and worker isolate communication. Authenticating a session is now significantly faster, dropping from seconds to milliseconds.
+- **Zero-Trust Handshake**: Refined the initial handshake protocol to minimize CPU cycles while maintaining the "Defense in Depth" strategy.
+
+### Changed
+- **Client SDK Synchronisation**: `client/dart/revani.dart` has been updated to handle the new AOT-optimized packet structures and improved status code responses.
+- **Logging Architecture**: Server-side prints and logs now follow a more informative and robust structure for easier debugging in production environments.
+
+### Fixed
+- Fixed an issue where the Side-Kitchen HTTP layer could experience overhead during massive concurrent file uploads.
+- Resolved potential race conditions in index rebuilding during high-frequency restart cycles.

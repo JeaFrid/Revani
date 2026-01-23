@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:http/http.dart' as http;
@@ -26,16 +25,18 @@ class RevaniResponse {
   bool get isSuccess => status >= 200 && status < 300;
 
   static RevaniResponse fromMap(Map<String, dynamic> map) {
-    dynamic effectiveData = map['data'];
-    if (effectiveData == null && map.containsKey('id')) {
-      effectiveData = {'id': map['id']};
+    Map<String, dynamic> effectiveData = {};
+    if (map['data'] != null && map['data'] is Map) {
+      effectiveData.addAll(Map<String, dynamic>.from(map['data']));
+    } else if (map['data'] != null) {
+      effectiveData['payload'] = map['data'];
     }
-    if (effectiveData == null && map.containsKey('session_key')) {
-      effectiveData = {'session_key': map['session_key']};
+
+    if (map.containsKey('id')) effectiveData['id'] = map['id'];
+    if (map.containsKey('session_key')) {
+      effectiveData['session_key'] = map['session_key'];
     }
-    if (effectiveData == null && map.containsKey('token')) {
-      effectiveData = {'token': map['token']};
-    }
+    if (map.containsKey('token')) effectiveData['token'] = map['token'];
 
     return RevaniResponse(
       status: map['status'] ?? 500,
@@ -53,6 +54,16 @@ class RevaniResponse {
       error: error,
       description: 'Connection failed',
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'status': status,
+      'message': message,
+      'error': error,
+      'data': data,
+      'description': description,
+    };
   }
 }
 
@@ -108,7 +119,7 @@ class RevaniClient {
 
     final ioc = HttpClient();
     ioc.badCertificateCallback =
-        (X509Certificate cert, String host, int port) => true;
+        (X509Certificate cert, String host, int port) => false;
     _httpClient = IOClient(ioc);
   }
 
@@ -121,9 +132,12 @@ class RevaniClient {
           host,
           port,
           onBadCertificate: (cert) => true,
-        );
+        ).timeout(const Duration(seconds: 10));
       } else {
-        _socket = await Socket.connect(host, port);
+        _socket = await Socket.connect(
+          host,
+          port,
+        ).timeout(const Duration(seconds: 10));
       }
 
       _socket!.listen(
@@ -139,11 +153,19 @@ class RevaniClient {
   }
 
   Future<void> _syncTime() async {
-    final res = await execute({'cmd': 'health'}, useEncryption: false);
-    if (res.isSuccess && res.data != null && res.data['timestamp'] != null) {
-      int serverTime = res.data['timestamp'];
-      _serverTimeOffset = serverTime - DateTime.now().millisecondsSinceEpoch;
-    }
+    try {
+      final res = await execute({
+        'cmd': 'health',
+      }, useEncryption: false).timeout(const Duration(seconds: 2));
+      if (res.isSuccess &&
+          res.data != null &&
+          res.data['payload'] != null &&
+          res.data['payload']['timestamp'] != null) {
+        _serverTimeOffset =
+            res.data['payload']['timestamp'] -
+            DateTime.now().millisecondsSinceEpoch;
+      }
+    } catch (_) {}
   }
 
   void _attemptReconnect() async {
@@ -151,36 +173,28 @@ class RevaniClient {
     _isReconnecting = true;
     _socket?.destroy();
     _socket = null;
-    int attempts = 0;
-    while (_socket == null) {
-      attempts++;
-      await Future.delayed(
-        Duration(seconds: min(30, pow(2, attempts).toInt())),
-      );
-      try {
-        await connect();
-      } catch (_) {}
-    }
+    await Future.delayed(const Duration(seconds: 2));
+    try {
+      await connect();
+    } catch (_) {}
   }
 
   void _onData(Uint8List data) {
     _buffer.addAll(data);
-    while (_buffer.length >= 4) {
-      final header = ByteData.sublistView(
-        Uint8List.fromList(_buffer.sublist(0, 4)),
-      );
+    while (true) {
+      if (_buffer.length < 4) break;
+      final headerBytes = Uint8List.fromList(_buffer.sublist(0, 4));
+      final header = ByteData.sublistView(headerBytes);
       final length = header.getUint32(0);
       if (_buffer.length >= length + 4) {
-        final payload = _buffer.sublist(4, length + 4);
+        final payload = Uint8List.fromList(_buffer.sublist(4, length + 4));
         _buffer.removeRange(0, length + 4);
         try {
-          final jsonString = utf8.decode(payload);
-          final json = jsonDecode(jsonString);
+          final json = jsonDecode(utf8.decode(payload));
           if (json is Map<String, dynamic> &&
               json.containsKey('encrypted') &&
               _sessionKey != null) {
-            final decrypted = _decrypt(json['encrypted']);
-            _responseController.add(jsonDecode(decrypted));
+            _responseController.add(jsonDecode(_decrypt(json['encrypted'])));
           } else {
             _responseController.add(json);
           }
@@ -210,13 +224,14 @@ class RevaniClient {
           : command;
 
       final bytes = utf8.encode(jsonEncode(payload));
-      final header = ByteData(4)..setUint32(0, bytes.length);
-
-      _socket!.add(header.buffer.asUint8List());
+      _socket!.add(
+        (ByteData(4)..setUint32(0, bytes.length)).buffer.asUint8List(),
+      );
       _socket!.add(bytes);
 
-      final rawResponse = await responseFuture.timeout(Duration(seconds: 15));
-      final response = RevaniResponse.fromMap(rawResponse);
+      final response = RevaniResponse.fromMap(
+        await responseFuture.timeout(const Duration(seconds: 5)),
+      );
 
       if (response.isSuccess) {
         onSuccess?.call(response);
@@ -237,37 +252,33 @@ class RevaniClient {
       "ts": DateTime.now().millisecondsSinceEpoch + _serverTimeOffset,
     });
     final salt = encrypt.IV.fromSecureRandom(16);
-    final keyBytes = sha256
-        .convert(utf8.encode(_sessionKey! + salt.base64))
-        .bytes;
-    final key = encrypt.Key(Uint8List.fromList(keyBytes));
+    final key = encrypt.Key(
+      Uint8List.fromList(
+        sha256.convert(utf8.encode(_sessionKey! + salt.base64)).bytes,
+      ),
+    );
     final iv = encrypt.IV.fromSecureRandom(16);
     final encrypter = encrypt.Encrypter(
       encrypt.AES(key, mode: encrypt.AESMode.gcm),
     );
-    final encrypted = encrypter.encrypt(wrapper, iv: iv);
-    return "${salt.base64}:${iv.base64}:${encrypted.base64}";
+    return "${salt.base64}:${iv.base64}:${encrypter.encrypt(wrapper, iv: iv).base64}";
   }
 
   String _decrypt(String encryptedData) {
     final parts = encryptedData.split(':');
-    final salt = encrypt.IV.fromBase64(parts[0]);
-    final iv = encrypt.IV.fromBase64(parts[1]);
-    final cipherText = parts[2];
-    final keyBytes = sha256
-        .convert(utf8.encode(_sessionKey! + salt.base64))
-        .bytes;
-    final key = encrypt.Key(Uint8List.fromList(keyBytes));
+    final key = encrypt.Key(
+      Uint8List.fromList(
+        sha256.convert(utf8.encode(_sessionKey! + parts[0])).bytes,
+      ),
+    );
     final encrypter = encrypt.Encrypter(
       encrypt.AES(key, mode: encrypt.AESMode.gcm),
     );
-    final decrypted = encrypter.decrypt64(cipherText, iv: iv);
-    final Map<String, dynamic> wrapper = jsonDecode(decrypted);
-    return wrapper['payload'];
+    return jsonDecode(
+      encrypter.decrypt64(parts[2], iv: encrypt.IV.fromBase64(parts[1])),
+    )['payload'];
   }
 
-  void _handleConnectionError(dynamic e) => _attemptReconnect();
-  void _handleConnectionDone() => _attemptReconnect();
   void setSession(String key) => _sessionKey = key;
   void setAccount(String id) => _accountID = id;
   void setToken(String token) => _token = token;
@@ -280,7 +291,7 @@ class RevaniClient {
   String get projectName => _projectName ?? "";
   String get projectID => _projectID ?? "";
   String get token => _token ?? "";
-  bool get isSignedIn => _token != null;
+  bool get isSignedIn => _token != null && _token!.isNotEmpty;
 
   void logout() {
     _sessionKey = null;
@@ -289,11 +300,40 @@ class RevaniClient {
     _socket?.destroy();
     _socket = null;
   }
+
+  void _handleConnectionError(dynamic e) => _attemptReconnect();
+  void _handleConnectionDone() => _attemptReconnect();
 }
 
 class RevaniAccount {
   final RevaniClient _client;
   RevaniAccount(this._client);
+
+  Future<RevaniResponse> login(
+    String email,
+    String password, {
+    SuccessCallback? onSuccess,
+    ErrorCallback? onError,
+  }) async {
+    final res = await _client.execute({
+      'cmd': 'auth/login',
+      'email': email,
+      'password': password,
+    }, useEncryption: false);
+    if (res.isSuccess && res.data != null) {
+      if (res.data.containsKey('session_key')) {
+        _client.setSession(res.data['session_key']);
+      }
+      if (res.data.containsKey('token')) _client.setToken(res.data['token']);
+      if (res.data.containsKey('id')) {
+        _client.setAccount(res.data['id']);
+        onSuccess?.call(res);
+        return res;
+      }
+    }
+    onError?.call(res);
+    return res;
+  }
 
   Future<RevaniResponse> create(
     String email,
@@ -313,36 +353,6 @@ class RevaniAccount {
     onError: onError,
   );
 
-  Future<RevaniResponse> login(
-    String email,
-    String password, {
-    SuccessCallback? onSuccess,
-    ErrorCallback? onError,
-  }) async {
-    final res = await _client.execute({
-      'cmd': 'auth/login',
-      'email': email,
-      'password': password,
-    }, useEncryption: false);
-
-    if (res.isSuccess && res.data != null) {
-      if (res.data.containsKey('session_key')) {
-        _client.setSession(res.data['session_key']);
-      }
-      if (res.data.containsKey('token')) {
-        _client.setToken(res.data['token']);
-      }
-      if (res.data.containsKey('id')) {
-        _client.setAccount(res.data['id']);
-        onSuccess?.call(res);
-        return res;
-      }
-    }
-
-    onError?.call(res);
-    return res;
-  }
-
   Future<RevaniResponse> getData({
     SuccessCallback? onSuccess,
     ErrorCallback? onError,
@@ -357,6 +367,25 @@ class RevaniProject {
   final RevaniClient _client;
   RevaniProject(this._client);
 
+  Future<RevaniResponse> use(
+    String name, {
+    SuccessCallback? onSuccess,
+    ErrorCallback? onError,
+  }) async {
+    final res = await _client.execute({
+      'cmd': 'project/exist',
+      'accountID': _client.accountID,
+      'projectName': name,
+    });
+    if (res.isSuccess) {
+      _client.setProject(name, res.data['id'] ?? res.data['payload']);
+      onSuccess?.call(res);
+    } else {
+      onError?.call(res);
+    }
+    return res;
+  }
+
   Future<RevaniResponse> create(
     String name, {
     SuccessCallback? onSuccess,
@@ -370,25 +399,6 @@ class RevaniProject {
     onSuccess: onSuccess,
     onError: onError,
   );
-
-  Future<RevaniResponse> use(
-    String name, {
-    SuccessCallback? onSuccess,
-    ErrorCallback? onError,
-  }) async {
-    final res = await _client.execute({
-      'cmd': 'project/exist',
-      'accountID': _client.accountID,
-      'projectName': name,
-    });
-    if (res.isSuccess) _client.setProject(name, res.data['id'] ?? res.data);
-    if (res.isSuccess) {
-      onSuccess?.call(res);
-    } else {
-      onError?.call(res);
-    }
-    return res;
-  }
 }
 
 class RevaniData {
@@ -1088,7 +1098,6 @@ class RevaniStorage {
   Future<RevaniResponse> upload({
     required String fileName,
     required List<int> bytes,
-    bool compress = false,
     SuccessCallback? onSuccess,
     ErrorCallback? onError,
   }) async {
@@ -1101,10 +1110,10 @@ class RevaniStorage {
           'x-project-name': _client.projectName,
           'x-file-name': fileName,
           'x-session-token': _client.token,
+          'content-type': 'application/octet-stream',
         },
         body: bytes,
       );
-
       final res = RevaniResponse.fromMap(jsonDecode(response.body));
       if (res.isSuccess) {
         onSuccess?.call(res);
@@ -1132,7 +1141,6 @@ class RevaniStorage {
         url,
         headers: {'x-session-token': _client.token},
       );
-
       if (response.statusCode == 200) {
         final res = RevaniResponse(
           status: 200,

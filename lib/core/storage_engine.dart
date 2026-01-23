@@ -8,11 +8,13 @@ import 'package:revani/config.dart';
 class RevaniStorageCore {
   final String _baseStoragePath;
   final int _maxFileSize;
+
   RevaniStorageCore()
     : _baseStoragePath = RevaniConfig.storagePath,
       _maxFileSize = RevaniConfig.maxFileSizeMB * 1024 * 1024 {
     _initDirectory();
   }
+
   void _initDirectory() {
     final dir = Directory(_baseStoragePath);
     if (!dir.existsSync()) {
@@ -23,9 +25,7 @@ class RevaniStorageCore {
   bool validateFile(String fileName, int fileSize) {
     if (fileSize > _maxFileSize) return false;
     final ext = p.extension(fileName).toLowerCase();
-    if (!RevaniConfig.allowedExtensions.contains(ext)) return false;
-
-    return true;
+    return RevaniConfig.allowedExtensions.contains(ext);
   }
 
   Future<File> saveFile(String projectID, String fileId, Uint8List data) async {
@@ -38,27 +38,24 @@ class RevaniStorageCore {
     return await file.writeAsBytes(data, flush: true);
   }
 
-  Future<Uint8List?> readFile(String projectID, String fileId) async {
-    final filePath = p.join(_baseStoragePath, projectID, fileId);
-    final file = File(filePath);
+  Future<Uint8List?> readFileRaw(String absolutePath) async {
+    final file = File(absolutePath);
     if (await file.exists()) {
       return await file.readAsBytes();
     }
     return null;
   }
 
-  Future<void> deleteFile(String projectID, String fileId) async {
-    final filePath = p.join(_baseStoragePath, projectID, fileId);
-    final file = File(filePath);
+  Future<void> deleteFileRaw(String absolutePath) async {
+    final file = File(absolutePath);
     if (await file.exists()) {
       await file.delete();
     }
   }
 
-  Future<bool> optimizeImage(String projectID, String fileId) async {
+  Future<bool> optimizeImageRaw(String absolutePath) async {
     try {
-      final filePath = p.join(_baseStoragePath, projectID, fileId);
-      final file = File(filePath);
+      final file = File(absolutePath);
       if (!await file.exists()) return false;
 
       final bytes = await file.readAsBytes();
@@ -74,14 +71,13 @@ class RevaniStorageCore {
         await file.writeAsBytes(compressedBytes, flush: true);
         return true;
       }
-
       return false;
     } catch (e) {
       return false;
     }
   }
 
-  String getStoragePath(String projectID, String fileId) {
+  String buildPath(String projectID, String fileId) {
     return p.join(_baseStoragePath, projectID, fileId);
   }
 }

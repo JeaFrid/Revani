@@ -188,12 +188,14 @@ class RequestDispatcher {
           break;
         case 'storage/upload':
           List<int> fileData;
-          if (req['raw_value'] != null) {
-            fileData = (req['raw_value'] as TransferableTypedData)
-                .materialize()
-                .asUint8List();
-          } else {
+          if (req['bytes'] is List) {
             fileData = (req['bytes'] as List).cast<int>();
+          } else {
+            return {
+              'status': 400,
+              'message': 'Invalid bytes format',
+              'error': 'Bad Request',
+            };
           }
           res = await storageSchema.uploadFile(
             req['accountID'],

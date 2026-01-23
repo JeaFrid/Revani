@@ -10,6 +10,7 @@ const String _kCyan = '\x1B[36m';
 
 const String logFile = 'revani.log';
 const String pidFile = 'server.pid';
+const String binaryPath = 'bin/server.exe';
 
 void main() async {
   while (true) {
@@ -27,8 +28,8 @@ void main() async {
           _kReset,
     );
 
-    print('1. ${_kGreen}Start Test Mode$_kReset');
-    print('2. ${_kGreen}Start Live Mode$_kReset');
+    print('1. ${_kGreen}Start Test Mode (JIT)$_kReset');
+    print('2. ${_kGreen}Start Live Mode (AOT Compilation)$_kReset');
     print('3. ${_kYellow}Watch Logs$_kReset');
     print('4. ${_kRed}Stop Server$_kReset');
     print('5. ${_kRed}UNINSTALL SYSTEM$_kReset');
@@ -76,7 +77,7 @@ void main() async {
 }
 
 Future<void> _startTestMode() async {
-  print('\n$_kGreen[TEST MODE] Starting...$_kReset');
+  print('\n$_kGreen[TEST MODE] Starting via JIT...$_kReset');
   print('Use CTRL+C to exit.\n');
 
   var process = await Process.start('dart', [
@@ -87,7 +88,22 @@ Future<void> _startTestMode() async {
 }
 
 Future<void> _startLiveMode() async {
-  print('\n$_kGreen[LIVE MODE] Starting in background...$_kReset');
+  print('\n$_kCyan[BUILD] Compiling to AOT binary for performance...$_kReset');
+
+  var compileResult = await Process.run('dart', [
+    'compile',
+    'exe',
+    'bin/server.dart',
+    '-o',
+    binaryPath,
+  ]);
+
+  if (compileResult.exitCode != 0) {
+    print('$_kRed[ERROR] Compilation failed: ${compileResult.stderr}$_kReset');
+    return;
+  }
+
+  print('$_kGreen[SUCCESS] Compilation complete.$_kReset');
 
   if (File(pidFile).existsSync()) {
     print(
@@ -96,12 +112,11 @@ Future<void> _startLiveMode() async {
     return;
   }
 
-  var shellCmd =
-      'nohup dart run bin/server.dart > $logFile 2>&1 & echo \$! > $pidFile';
+  var shellCmd = 'nohup ./$binaryPath > $logFile 2>&1 & echo \$! > $pidFile';
 
   await Process.run('bash', ['-c', shellCmd]);
 
-  print('$_kGreen[SUCCESS] Server started.$_kReset');
+  print('$_kGreen[SUCCESS] AOT Server started in background.$_kReset');
   print('Log file: $logFile');
   print('PID file: $pidFile');
 
@@ -129,12 +144,9 @@ Future<void> _stopServer() async {
     print(
       '$_kYellow[INFO] PID file not found. Trying manual search...$_kReset',
     );
-    var result = await Process.run('pkill', ['-f', 'dart run bin/server.dart']);
-    if (result.exitCode == 0) {
-      print('$_kGreen[SUCCESS] Revani processes terminated.$_kReset');
-    } else {
-      print('$_kRed[ERROR] No running process found.$_kReset');
-    }
+    await Process.run('pkill', ['-f', binaryPath]);
+    await Process.run('pkill', ['-f', 'dart run bin/server.dart']);
+    print('$_kGreen[SUCCESS] Revani processes terminated.$_kReset');
     return;
   }
 
@@ -144,12 +156,13 @@ Future<void> _stopServer() async {
 
     if (result.exitCode == 0) {
       print('$_kGreen[SUCCESS] Process ($pid) stopped.$_kReset');
-      File(pidFile).deleteSync();
+      if (File(pidFile).existsSync()) File(pidFile).deleteSync();
     } else {
       print(
-        '$_kRed[ERROR] Could not stop process. Maybe it is already gone.$_kReset',
+        '$_kRed[ERROR] Could not stop process. Terminating manually...$_kReset',
       );
-      File(pidFile).deleteSync();
+      await Process.run('pkill', ['-f', binaryPath]);
+      if (File(pidFile).existsSync()) File(pidFile).deleteSync();
     }
   } catch (e) {
     print('Error: $e');
@@ -283,6 +296,7 @@ Future<void> _cleanDatabase() async {
     'revani.db.compact',
     'revani.log',
     pidFile,
+    binaryPath,
   ];
 
   for (var f in filesToDelete) {
