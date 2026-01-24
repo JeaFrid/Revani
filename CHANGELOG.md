@@ -120,3 +120,7 @@ This version marks a significant milestone with the transition from JIT (Just-In
 ### Fixed
 - Fixed an issue where the Side-Kitchen HTTP layer could experience overhead during massive concurrent file uploads.
 - Resolved potential race conditions in index rebuilding during high-frequency restart cycles.
+
+## [3.1.0] - 2026-01-24
+
+- Minor changes and bug fixes related to storage space.

@@ -37,7 +37,7 @@ void main(List<String> args) async {
       exit(1);
     });
 
-    _startMaintenanceLoop(persistence);
+    startMaintenanceLoop(persistence);
     print('[+] Floor sweeping cycle (Maintenance) is now active.');
 
     final rateLimitReceivePort = ReceivePort();
@@ -69,12 +69,9 @@ void main(List<String> args) async {
         .serve(restHandler, InternetAddress.anyIPv4, restPort, shared: true)
         .catchError((e) {
           print('[!] Side-kitchen could not be opened: $e');
-          return Future.value(null);
         });
 
-    if (restServer != null) {
-      print('[+] Side-kitchen is open for fast delivery on port: $restPort');
-    }
+    print('[+] Side-kitchen is open for fast delivery on port: $restPort');
 
     final workersCount = RevaniConfig.workerCount;
     print('[*] Assigning $workersCount pastry chefs to their stations.');
@@ -134,7 +131,7 @@ void main(List<String> args) async {
 
     ProcessSignal.sigint.watch().listen((_) async {
       print('\n[!] Closing the shop... Saving recipes and cleaning counters.');
-      await restServer?.close();
+      await restServer.close();
       await persistence.close();
       print('[!] Bakery closed. See you in the next shift!');
       exit(0);
@@ -175,12 +172,38 @@ Future<Response> _handleRestRequests(
         );
       }
 
-      final bodyBytes = await request.read().expand((b) => b).toList();
-      final res = await dispatcher.storageSchema.uploadFile(
+      final projectID = await dispatcher.storageSchema.resolveProjectID(
         accountID,
         projectName,
+      );
+
+      if (projectID == null) {
+        return Response.notFound(jsonEncode({'error': 'Project not found'}));
+      }
+
+      final fileId = const Uuid().v4();
+      final fileHandle = dispatcher.storageSchema.core.getFileHandle(
+        projectID,
+        fileId,
+      );
+      final sink = fileHandle.openWrite();
+
+      try {
+        await request.read().pipe(sink);
+      } catch (e) {
+        await sink.close();
+        if (await fileHandle.exists()) await fileHandle.delete();
+        return Response.internalServerError(body: 'Upload pipe broken');
+      }
+
+      final fileSize = await fileHandle.length();
+      final res = await dispatcher.storageSchema.registerUploadedFile(
+        accountID,
+        projectID,
+        fileId,
         fileName,
-        bodyBytes,
+        fileSize,
+        compressImage: false,
       );
 
       return Response(
@@ -206,26 +229,31 @@ Future<Response> _handleRestRequests(
       final parts = path.split('/');
       if (parts.length < 3) return Response.notFound('Wrong table number');
 
-      final projectID = parts[1];
+      final projectIdentifier = parts[1];
       final fileId = parts[2];
       final accountID = sessionRes.data['user_id'];
 
-      if (!(await dispatcher.projectSchema.isOwner(accountID, projectID))) {
-        return Response.forbidden('This is not your tray');
-      }
-
-      final res = await dispatcher.storageSchema.downloadFile(
+      final pathRes = await dispatcher.storageSchema.getFilePath(
         accountID,
-        projectID,
+        projectIdentifier,
         fileId,
       );
-      if (res.status?.code != 200) {
+
+      if (pathRes.status?.code != 200) {
         return Response.notFound('Ingredient not found');
       }
 
+      final file = File(pathRes.data['path']);
+      if (!await file.exists()) {
+        return Response.notFound('Empty jar');
+      }
+
       return Response.ok(
-        res.data['bytes'],
-        headers: {'content-type': 'application/octet-stream'},
+        file.openRead(),
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-length': (await file.length()).toString(),
+        },
       );
     }
   } catch (e) {
@@ -471,8 +499,8 @@ void _sendEncryptedData(
   }
 }
 
-void _startMaintenanceLoop(RevaniPersistence persistence) {
-  Timer.periodic(RevaniConfig.compactionInterval, (_) {
+void startMaintenanceLoop(RevaniPersistence persistence) {
+  Timer.periodic(RevaniConfig.compactionInterval, (timer) {
     print('[*] Compacting the pastry shop database to save space...');
     persistence.compact().catchError(
       (e) => print('[!] Maintenance failure: $e'),

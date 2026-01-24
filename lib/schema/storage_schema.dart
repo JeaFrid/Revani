@@ -1,10 +1,8 @@
 import 'dart:typed_data';
-import 'package:revani/config.dart';
 import 'package:revani/schema/data_schema.dart';
 import 'package:revani/core/database_engine.dart';
 import 'package:revani/core/storage_engine.dart';
 import 'package:revani/model/print.dart';
-import 'package:revani/tools/tokener.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path/path.dart' as p;
 
@@ -36,6 +34,69 @@ class StorageSchema {
     }
   }
 
+  Future<String?> resolveProjectID(
+    String accountID,
+    String projectNameOrId,
+  ) async {
+    String? projectID = await projectSchema.existProject(
+      accountID,
+      projectNameOrId,
+    );
+    if (projectID == null) {
+      if (await projectSchema.isOwner(accountID, projectNameOrId)) {
+        projectID = projectNameOrId;
+      }
+    }
+    return projectID;
+  }
+
+  Future<DataResponse> registerUploadedFile(
+    String accountID,
+    String projectID,
+    String fileId,
+    String fileName,
+    int size, {
+    bool compressImage = false,
+  }) async {
+    final ext = p.extension(fileName).toLowerCase();
+    final absolutePath = core.buildPath(projectID, fileId);
+
+    try {
+      bool isCompressed = false;
+      if (compressImage && _isImage(ext)) {
+        isCompressed = await core.optimizeImageRaw(absolutePath);
+      }
+
+      final fileMeta = {
+        "id": fileId,
+        "project_id": projectID,
+        "original_name": fileName,
+        "extension": ext,
+        "size": size,
+        "is_compressed": isCompressed,
+        "created_at": DateTime.now().millisecondsSinceEpoch,
+        "mime_type": _getMimeType(ext),
+      };
+
+      db.add(collectionTag, fileId, fileMeta);
+      db.setIndex(storageIndexTag, fileId, fileId);
+      _pathCache[fileId] = absolutePath;
+
+      return DataResponse(
+        message: "File uploaded successfully",
+        error: "",
+        status: StatusCodes.ok,
+        data: {"file_id": fileId, "compressed": isCompressed},
+      );
+    } catch (e) {
+      return DataResponse(
+        message: "Storage Registration Error",
+        error: e.toString(),
+        status: StatusCodes.internalServerError,
+      );
+    }
+  }
+
   Future<DataResponse> uploadFile(
     String accountID,
     String projectName,
@@ -61,37 +122,15 @@ class StorageSchema {
     }
 
     final fileId = uuid.v4();
-    final ext = p.extension(fileName).toLowerCase();
-
     try {
       await core.saveFile(projectID, fileId, Uint8List.fromList(rawData));
-      final absolutePath = core.buildPath(projectID, fileId);
-
-      bool isCompressed = false;
-      if (compressImage && _isImage(ext)) {
-        isCompressed = await core.optimizeImageRaw(absolutePath);
-      }
-
-      final fileMeta = {
-        "id": fileId,
-        "project_id": projectID,
-        "original_name": fileName,
-        "extension": ext,
-        "size": rawData.length,
-        "is_compressed": isCompressed,
-        "created_at": DateTime.now().millisecondsSinceEpoch,
-        "mime_type": _getMimeType(ext),
-      };
-
-      db.add(collectionTag, fileId, fileMeta);
-      db.setIndex(storageIndexTag, fileId, fileId);
-      _pathCache[fileId] = absolutePath;
-
-      return DataResponse(
-        message: "File uploaded successfully",
-        error: "",
-        status: StatusCodes.ok,
-        data: {"file_id": fileId, "compressed": isCompressed},
+      return await registerUploadedFile(
+        accountID,
+        projectID,
+        fileId,
+        fileName,
+        rawData.length,
+        compressImage: compressImage,
       );
     } catch (e) {
       return DataResponse(
@@ -102,12 +141,12 @@ class StorageSchema {
     }
   }
 
-  Future<DataResponse> downloadFile(
+  Future<DataResponse> getFilePath(
     String accountID,
-    String projectName,
+    String projectNameOrId,
     String fileId,
   ) async {
-    final projectID = await projectSchema.existProject(accountID, projectName);
+    final projectID = await resolveProjectID(accountID, projectNameOrId);
     if (projectID == null) {
       return DataResponse(
         message: "Project not found",
@@ -125,7 +164,23 @@ class StorageSchema {
       );
     }
 
-    final bytes = await core.readFileRaw(absolutePath);
+    return DataResponse(
+      message: "Path found",
+      error: "",
+      status: StatusCodes.ok,
+      data: {"path": absolutePath},
+    );
+  }
+
+  Future<DataResponse> downloadFile(
+    String accountID,
+    String projectNameOrId,
+    String fileId,
+  ) async {
+    final res = await getFilePath(accountID, projectNameOrId, fileId);
+    if (res.status != StatusCodes.ok) return res;
+
+    final bytes = await core.readFileRaw(res.data['path']);
     if (bytes == null) {
       return DataResponse(
         message: "File binary missing from disk",

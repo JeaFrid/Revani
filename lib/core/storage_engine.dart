@@ -28,13 +28,16 @@ class RevaniStorageCore {
     return RevaniConfig.allowedExtensions.contains(ext);
   }
 
-  Future<File> saveFile(String projectID, String fileId, Uint8List data) async {
+  File getFileHandle(String projectID, String fileId) {
     final projectDir = Directory(p.join(_baseStoragePath, projectID));
-    if (!await projectDir.exists()) {
-      await projectDir.create(recursive: true);
+    if (!projectDir.existsSync()) {
+      projectDir.createSync(recursive: true);
     }
-    final filePath = p.join(projectDir.path, fileId);
-    final file = File(filePath);
+    return File(p.join(projectDir.path, fileId));
+  }
+
+  Future<File> saveFile(String projectID, String fileId, Uint8List data) async {
+    final file = getFileHandle(projectID, fileId);
     return await file.writeAsBytes(data, flush: true);
   }
 

@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
+import 'package:path/path.dart' as p;
 
 class RevaniResponse {
   final int status;
@@ -1093,28 +1094,61 @@ class RevaniPubSub {
 
 class RevaniStorage {
   final RevaniClient _client;
+
   RevaniStorage(this._client);
 
   Future<RevaniResponse> upload({
-    required String fileName,
-    required List<int> bytes,
+    required File file,
+    String? fileName,
+    bool compress = false,
     SuccessCallback? onSuccess,
     ErrorCallback? onError,
   }) async {
     try {
+      if (!file.existsSync()) {
+        final res = RevaniResponse(
+          status: 404,
+          message: "File not found locally",
+          error: "FileSystemException",
+        );
+        onError?.call(res);
+        return res;
+      }
+
+      final stream = file.openRead();
+      final length = await file.length();
+      final name = fileName ?? p.basename(file.path);
+
       final url = Uri.parse("${_client.httpBaseUrl}/upload");
-      final response = await _client._httpClient.post(
-        url,
-        headers: {
-          'x-account-id': _client.accountID,
-          'x-project-name': _client.projectName,
-          'x-file-name': fileName,
-          'x-session-token': _client.token,
-          'content-type': 'application/octet-stream',
+      final request = http.StreamedRequest("POST", url);
+
+      request.headers['x-account-id'] = _client.accountID;
+      request.headers['x-project-name'] = _client.projectName;
+      request.headers['x-file-name'] = name;
+      request.headers['x-session-token'] = _client.token;
+      request.headers['content-type'] = 'application/octet-stream';
+
+      if (compress) {
+        request.headers['x-compress'] = 'true';
+      }
+
+      request.contentLength = length;
+
+      stream.listen(
+        (chunk) => request.sink.add(chunk),
+        onDone: () => request.sink.close(),
+        onError: (e) {
+          request.sink.addError(e);
+          request.sink.close();
         },
-        body: bytes,
+        cancelOnError: true,
       );
-      final res = RevaniResponse.fromMap(jsonDecode(response.body));
+
+      final streamedResponse = await request.send();
+      final responseString = await streamedResponse.stream.bytesToString();
+      final jsonResponse = jsonDecode(responseString);
+      final res = RevaniResponse.fromMap(jsonResponse);
+
       if (res.isSuccess) {
         onSuccess?.call(res);
       } else {
@@ -1128,8 +1162,9 @@ class RevaniStorage {
     }
   }
 
-  Future<RevaniResponse> download(
-    String fileId, {
+  Future<void> downloadToFile({
+    required String fileId,
+    required String savePath,
     SuccessCallback? onSuccess,
     ErrorCallback? onError,
   }) async {
@@ -1137,30 +1172,69 @@ class RevaniStorage {
       final url = Uri.parse(
         "${_client.httpBaseUrl}/file/${_client.projectID}/$fileId",
       );
-      final response = await _client._httpClient.get(
-        url,
-        headers: {'x-session-token': _client.token},
-      );
+
+      final request = http.Request('GET', url);
+      request.headers['x-session-token'] = _client.token;
+
+      final response = await _client._httpClient.send(request);
+
       if (response.statusCode == 200) {
+        final file = File(savePath);
+        final sink = file.openWrite();
+
+        await response.stream.pipe(sink);
+        await sink.flush();
+        await sink.close();
+
         final res = RevaniResponse(
           status: 200,
-          message: "Success",
-          data: {"bytes": response.bodyBytes},
+          message: "File downloaded to $savePath",
+          data: {"path": savePath},
         );
         onSuccess?.call(res);
-        return res;
       } else {
         final res = RevaniResponse(
           status: response.statusCode,
           message: "Download Failed",
+          error: response.reasonPhrase,
         );
         onError?.call(res);
-        return res;
       }
     } catch (e) {
       final res = RevaniResponse.networkError(e.toString());
       onError?.call(res);
-      return res;
+    }
+  }
+
+  Future<Stream<List<int>>?> downloadStream({
+    required String fileId,
+    ErrorCallback? onError,
+  }) async {
+    try {
+      final url = Uri.parse(
+        "${_client.httpBaseUrl}/file/${_client.projectID}/$fileId",
+      );
+
+      final request = http.Request('GET', url);
+      request.headers['x-session-token'] = _client.token;
+
+      final response = await _client._httpClient.send(request);
+
+      if (response.statusCode == 200) {
+        return response.stream;
+      } else {
+        onError?.call(
+          RevaniResponse(
+            status: response.statusCode,
+            message: "Stream Init Failed",
+            error: response.reasonPhrase,
+          ),
+        );
+        return null;
+      }
+    } catch (e) {
+      onError?.call(RevaniResponse.networkError(e.toString()));
+      return null;
     }
   }
 
