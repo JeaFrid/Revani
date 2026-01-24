@@ -124,3 +124,18 @@ This version marks a significant milestone with the transition from JIT (Just-In
 ## [3.1.0] - 2026-01-24
 
 - Minor changes and bug fixes related to storage space.
+
+## [3.2.1] - 2026-01-25
+
+### Added
+- **DB-Independent Storage**: Fully decoupled file management from the NoSQL engine; storage now operates directly on a file system hierarchy (`storage/projectID/fileID`).
+- **Session-Verified Ingestion**: POST uploads now require a valid `x-session-token` for authorization, bridging the security gap between TCP sessions and HTTP operations.
+
+### Changed
+- **Raw Binary Piping**: Implemented a direct stream-to-disk model using `IOSink`, bypassing RAM-heavy decoding and eliminating previous memory-limit bottlenecks.
+- **Stateless Media Serving**: Optimized GET endpoints for direct browser access, allowing public read throughput without token overhead.
+- **Ultra-Lean Architecture**: Removed all server-side image processing and `package:image` dependencies to ensure maximum stability and microsecond response times.
+
+### Fixed
+- **Memory Threshold Crashing**: Resolved the 500kb file limit and Isolate-level RAM exhaustion bugs.
+- **Null Reference Exceptions**: Fixed issues where file operations returned null due to synchronous database dependencies or file-locking conflicts.

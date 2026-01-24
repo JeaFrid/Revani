@@ -1,6 +1,6 @@
 name: revani
 description: A server app using the shelf package and Docker.
-version: 3.1.0
+version: 3.2.1
 # repository: https://github.com/my_org/my_repo
 
 environment:

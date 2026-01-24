@@ -1,11 +1,3 @@
-/*
- * Copyright (C) 2026 JeaFriday (https://github.com/JeaFrid/Revani)
- * * This project is part of Revani
- * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
- * See the LICENSE file in the project root for full license information.
- * * For commercial licensing, please contact: JeaFriday
- */
-
 import 'dart:io';
 
 class RoleLimits {
@@ -40,7 +32,9 @@ class RevaniConfig {
   static const int maxFileSizeMB = 50;
   static const List<String> allowedExtensions = [
     '.jpg',
+    '.jpeg',
     '.png',
+    '.webp',
     '.pdf',
     '.mp4',
     '.json',

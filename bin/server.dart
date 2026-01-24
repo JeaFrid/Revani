@@ -153,12 +153,11 @@ Future<Response> _handleRestRequests(
     if (request.method == 'POST' && path == 'upload') {
       final accountID = request.headers['x-account-id'];
       final projectName = request.headers['x-project-name'];
-      final fileName = request.headers['x-file-name'] ?? 'unnamed_batch';
       final sessionToken = request.headers['x-session-token'];
 
       if (accountID == null || projectName == null || sessionToken == null) {
         return Response.forbidden(
-          jsonEncode({'error': 'Missing pantry headers'}),
+          jsonEncode({'error': 'Unauthorized: Missing pantry credentials'}),
         );
       }
 
@@ -168,7 +167,7 @@ Future<Response> _handleRestRequests(
       if (sessionRes.status?.code != 200 ||
           sessionRes.data['user_id'] != accountID) {
         return Response.unauthorized(
-          jsonEncode({'error': 'Health Inspector Alert: Identity Mismatch'}),
+          jsonEncode({'error': 'Security Alert: Invalid TCP Session'}),
         );
       }
 
@@ -196,52 +195,27 @@ Future<Response> _handleRestRequests(
         return Response.internalServerError(body: 'Upload pipe broken');
       }
 
-      final fileSize = await fileHandle.length();
-      final res = await dispatcher.storageSchema.registerUploadedFile(
-        accountID,
-        projectID,
-        fileId,
-        fileName,
-        fileSize,
-        compressImage: false,
-      );
-
-      return Response(
-        res.status?.code ?? 200,
-        body: jsonEncode(res.toJson()),
+      return Response.ok(
+        jsonEncode({
+          'status': 200,
+          'message': 'File uploaded successfully',
+          'data': {'file_id': fileId, 'project_id': projectID},
+        }),
         headers: {'content-type': 'application/json'},
       );
     }
 
     if (request.method == 'GET' && path.startsWith('file/')) {
-      final sessionToken = request.headers['x-session-token'];
-      if (sessionToken == null) {
-        return Response.forbidden('No entry to the storage allowed');
-      }
-
-      final sessionRes = await dispatcher.sessionSchema.verifyToken(
-        sessionToken,
-      );
-      if (sessionRes.status?.code != 200) {
-        return Response.unauthorized('Stale session');
-      }
-
       final parts = path.split('/');
       if (parts.length < 3) return Response.notFound('Wrong table number');
 
-      final projectIdentifier = parts[1];
+      final projectID = parts[1];
       final fileId = parts[2];
-      final accountID = sessionRes.data['user_id'];
 
       final pathRes = await dispatcher.storageSchema.getFilePath(
-        accountID,
-        projectIdentifier,
+        projectID,
         fileId,
       );
-
-      if (pathRes.status?.code != 200) {
-        return Response.notFound('Ingredient not found');
-      }
 
       final file = File(pathRes.data['path']);
       if (!await file.exists()) {

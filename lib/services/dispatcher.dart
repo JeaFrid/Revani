@@ -186,32 +186,6 @@ class RequestDispatcher {
             req['bucket'],
           );
           break;
-        case 'storage/upload':
-          List<int> fileData;
-          if (req['bytes'] is List) {
-            fileData = (req['bytes'] as List).cast<int>();
-          } else {
-            return {
-              'status': 400,
-              'message': 'Invalid bytes format',
-              'error': 'Bad Request',
-            };
-          }
-          res = await storageSchema.uploadFile(
-            req['accountID'],
-            req['projectName'],
-            req['fileName'],
-            fileData,
-            compressImage: req['compress'] ?? false,
-          );
-          break;
-        case 'storage/download':
-          res = await storageSchema.downloadFile(
-            req['accountID'],
-            req['projectName'],
-            req['fileId'],
-          );
-          break;
         case 'storage/delete':
           res = await storageSchema.deleteFile(
             req['accountID'],

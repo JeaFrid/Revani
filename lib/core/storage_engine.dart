@@ -1,17 +1,11 @@
 import 'dart:io';
-import 'dart:isolate';
-import 'dart:typed_data';
 import 'package:path/path.dart' as p;
-import 'package:image/image.dart' as img;
 import 'package:revani/config.dart';
 
 class RevaniStorageCore {
   final String _baseStoragePath;
-  final int _maxFileSize;
 
-  RevaniStorageCore()
-    : _baseStoragePath = RevaniConfig.storagePath,
-      _maxFileSize = RevaniConfig.maxFileSizeMB * 1024 * 1024 {
+  RevaniStorageCore() : _baseStoragePath = RevaniConfig.storagePath {
     _initDirectory();
   }
 
@@ -22,8 +16,7 @@ class RevaniStorageCore {
     }
   }
 
-  bool validateFile(String fileName, int fileSize) {
-    if (fileSize > _maxFileSize) return false;
+  bool validateFile(String fileName) {
     final ext = p.extension(fileName).toLowerCase();
     return RevaniConfig.allowedExtensions.contains(ext);
   }
@@ -36,47 +29,10 @@ class RevaniStorageCore {
     return File(p.join(projectDir.path, fileId));
   }
 
-  Future<File> saveFile(String projectID, String fileId, Uint8List data) async {
+  Future<void> deleteFileRaw(String projectID, String fileId) async {
     final file = getFileHandle(projectID, fileId);
-    return await file.writeAsBytes(data, flush: true);
-  }
-
-  Future<Uint8List?> readFileRaw(String absolutePath) async {
-    final file = File(absolutePath);
-    if (await file.exists()) {
-      return await file.readAsBytes();
-    }
-    return null;
-  }
-
-  Future<void> deleteFileRaw(String absolutePath) async {
-    final file = File(absolutePath);
     if (await file.exists()) {
       await file.delete();
-    }
-  }
-
-  Future<bool> optimizeImageRaw(String absolutePath) async {
-    try {
-      final file = File(absolutePath);
-      if (!await file.exists()) return false;
-
-      final bytes = await file.readAsBytes();
-      final originalSize = bytes.length;
-
-      final compressedBytes = await Isolate.run(() {
-        final image = img.decodeImage(bytes);
-        if (image == null) return null;
-        return img.encodeJpg(image, quality: 75);
-      });
-
-      if (compressedBytes != null && compressedBytes.length < originalSize) {
-        await file.writeAsBytes(compressedBytes, flush: true);
-        return true;
-      }
-      return false;
-    } catch (e) {
-      return false;
     }
   }
 
