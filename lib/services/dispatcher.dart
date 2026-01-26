@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
 import 'package:revani/core/database_engine.dart';
+import 'package:revani/core/pubsub_engine.dart';
 import 'package:revani/core/rate_limiter.dart';
 import 'package:revani/schema/data_schema.dart';
 import 'package:revani/schema/livekit_schema.dart';
@@ -48,6 +49,94 @@ class RequestDispatcher {
     sessionSchema.rebuildIndices();
   }
 
+  Future<Map<String, dynamic>> _handleBucketSubscribe(
+    Map<String, dynamic> req,
+  ) async {
+    try {
+      final clientId = req['clientId'];
+      final bucket = req['bucket'];
+      final projectId = req['projectId'];
+      final accountID = req['accountID'];
+
+      if (clientId == null ||
+          bucket == null ||
+          projectId == null ||
+          accountID == null) {
+        return {
+          'status': 400,
+          'message': 'Missing required parameters',
+          'error': 'Bad Request',
+        };
+      }
+      final projectSchema = DataSchemaProject(db);
+      final isOwner = await projectSchema.isOwner(accountID, projectId);
+
+      if (!isOwner) {
+        return {
+          'status': 403,
+          'message': 'Access denied to project',
+          'error': 'Forbidden',
+        };
+      }
+
+      final pubSub = RevaniPubSub();
+      pubSub.subscribeToBucket(clientId, bucket, projectId);
+
+      return {
+        'status': 200,
+        'message': 'Subscribed to bucket changes',
+        'data': {
+          'bucket': bucket,
+          'projectId': projectId,
+          'clientId': clientId,
+        },
+      };
+    } catch (e) {
+      return {
+        'status': 500,
+        'message': 'Subscription failed',
+        'error': e.toString(),
+      };
+    }
+  }
+
+  Future<Map<String, dynamic>> _handleBucketUnsubscribe(
+    Map<String, dynamic> req,
+  ) async {
+    try {
+      final clientId = req['clientId'];
+      final bucket = req['bucket'];
+      final projectId = req['projectId'];
+
+      if (clientId == null || bucket == null || projectId == null) {
+        return {
+          'status': 400,
+          'message': 'Missing required parameters',
+          'error': 'Bad Request',
+        };
+      }
+
+      final pubSub = RevaniPubSub();
+      pubSub.unsubscribeFromBucket(clientId, bucket, projectId);
+
+      return {
+        'status': 200,
+        'message': 'Unsubscribed from bucket changes',
+        'data': {
+          'bucket': bucket,
+          'projectId': projectId,
+          'clientId': clientId,
+        },
+      };
+    } catch (e) {
+      return {
+        'status': 500,
+        'message': 'Unsubscription failed',
+        'error': e.toString(),
+      };
+    }
+  }
+
   Future<Map<String, dynamic>> processCommand(Map<String, dynamic> req) async {
     final cmd = req['cmd'];
     final requesterAccountID = req['accountID'];
@@ -60,6 +149,12 @@ class RequestDispatcher {
       }
 
       switch (cmd) {
+        case 'bucket/subscribe':
+          return await _handleBucketSubscribe(req);
+
+        case 'bucket/unsubscribe':
+          return await _handleBucketUnsubscribe(req);
+
         case 'auth/verify-token':
           res = await sessionSchema.verifyToken(req['token']);
           break;
@@ -94,6 +189,7 @@ class RequestDispatcher {
             req['topic'],
           );
           break;
+
         case 'account/create':
           res = await accountSchema.createAccount(
             req['email'],

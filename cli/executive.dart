@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:args/args.dart';
-import '../client/dart/revani.dart';
+import 'revani.dart';
 
 const String _kReset = '\x1B[0m';
 const String _kBold = '\x1B[1m';

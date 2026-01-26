@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:isolate';
 import 'dart:math';
 import 'package:revani/config.dart';
+import 'package:revani/core/pubsub_engine.dart';
 
 class RevaniBson {
   static const int _typeNull = 0;
@@ -167,6 +168,7 @@ class _BufferReader {
 class RevaniData {
   final String bucket;
   final String tag;
+  final String? projectId;
   final Uint8List _storage;
   final int createdAt;
   final int? expiresAt;
@@ -177,6 +179,7 @@ class RevaniData {
     Map<String, dynamic> value, {
     int? createdAt,
     this.expiresAt,
+    this.projectId,
   }) : _storage = RevaniBson.encode(value),
        createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch;
 
@@ -184,6 +187,7 @@ class RevaniData {
     this.bucket,
     this.tag,
     this._storage, {
+    this.projectId,
     int? createdAt,
     this.expiresAt,
   }) : createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch;
@@ -302,6 +306,7 @@ class RevaniDatabase {
     Map<String, dynamic>? value, {
     int? createdAt,
     int? expiresAt,
+    String? projectId,
     Uint8List? preEncodedValue,
     Map<String, Uint8List>? batchItems,
   }) {
@@ -311,6 +316,7 @@ class RevaniDatabase {
         'bucket': bucket,
         'tag': tag,
         'value': value,
+        'projectId': projectId,
         'preEncodedValue': preEncodedValue,
         'createdAt': createdAt,
         'expiresAt': expiresAt,
@@ -320,16 +326,6 @@ class RevaniDatabase {
   }
 
   final Map<String, Map<String, String>> _indices = {};
-
-  void add(
-    String bucket,
-    String tag,
-    Map<String, dynamic> value, {
-    Duration? ttl,
-  }) {
-    final bytes = RevaniBson.encode(value);
-    _addInternal(bucket, tag, bytes, value, ttl: ttl);
-  }
 
   void addRaw(String bucket, String tag, Uint8List rawValue, {Duration? ttl}) {
     _addInternal(bucket, tag, rawValue, null, ttl: ttl);
@@ -380,6 +376,7 @@ class RevaniDatabase {
     Uint8List rawData,
     Map<String, dynamic>? originalValue, {
     Duration? ttl,
+    String? projectId,
   }) {
     _box.putIfAbsent(bucket, () => <String, RevaniData>{});
 
@@ -393,6 +390,7 @@ class RevaniDatabase {
       bucket,
       tag,
       rawData,
+      projectId: projectId,
       createdAt: now,
       expiresAt: expiresAt,
     );
@@ -407,6 +405,7 @@ class RevaniDatabase {
       preEncodedValue: rawData,
       createdAt: now,
       expiresAt: expiresAt,
+      projectId: projectId,
     );
   }
 
@@ -469,22 +468,6 @@ class RevaniDatabase {
     return {'total_records': totalCount, 'buckets_count': _box.length};
   }
 
-  void remove(String bucket, String tag) {
-    final bucketMap = _box[bucket];
-    if (bucketMap != null && bucketMap.containsKey(tag)) {
-      bucketMap.remove(tag);
-      if (bucketMap.isEmpty) _box.remove(bucket);
-      _createEvent('remove', bucket, tag, null);
-    }
-  }
-
-  void clear(String bucket) {
-    if (_box.containsKey(bucket)) {
-      _box.remove(bucket);
-      _createEvent('clear', bucket, null, null);
-    }
-  }
-
   void deleteAll(String bucket) {
     clear(bucket);
   }
@@ -500,6 +483,110 @@ class RevaniDatabase {
 
   void removeIndex(String indexName, String key) {
     _indices[indexName]?.remove(key);
+  }
+
+  void _notifyBucketChange(
+    String bucket,
+    String tag,
+    String action,
+    Map<String, dynamic>? oldValue,
+    Map<String, dynamic>? newValue,
+    String? projectId,
+  ) {
+    try {
+      final pubSub = RevaniPubSub();
+      pubSub.publishBucketEvent(projectId ?? 'system', bucket, action, {
+        'tag': tag,
+        'action': action,
+        'oldValue': oldValue,
+        'newValue': newValue,
+        'bucket': bucket,
+        'projectId': projectId,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      }, senderId: 'system');
+    } catch (e) {
+      print('[!] Bucket notification error: $e');
+    }
+  }
+
+  void add(
+    String bucket,
+    String tag,
+    Map<String, dynamic> value, {
+    Duration? ttl,
+    String? projectId,
+  }) {
+    final bytes = RevaniBson.encode(value);
+    _addInternal(bucket, tag, bytes, value, ttl: ttl, projectId: projectId);
+    _notifyBucketChange(bucket, tag, 'added', null, value, projectId);
+  }
+
+  void remove(String bucket, String tag, {String? projectId}) {
+    final bucketMap = _box[bucket];
+    Map<String, dynamic>? oldValue;
+
+    if (bucketMap != null && bucketMap.containsKey(tag)) {
+      oldValue = bucketMap[tag]?.value;
+      bucketMap.remove(tag);
+      if (bucketMap.isEmpty) _box.remove(bucket);
+      _createEvent('remove', bucket, tag, null);
+      _notifyBucketChange(bucket, tag, 'deleted', oldValue, null, projectId);
+    }
+  }
+
+  void update(
+    String bucket,
+    String tag,
+    Map<String, dynamic> newValue, {
+    String? projectId,
+  }) {
+    final bucketMap = _box[bucket];
+    Map<String, dynamic>? oldValue;
+
+    if (bucketMap != null && bucketMap.containsKey(tag)) {
+      oldValue = bucketMap[tag]?.value;
+      final bytes = RevaniBson.encode(newValue);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      int? expiresAt;
+
+      final data = RevaniData.fromBytes(
+        bucket,
+        tag,
+        bytes,
+        createdAt: now,
+        expiresAt: expiresAt,
+      );
+      bucketMap[tag] = data;
+
+      _notifyBucketChange(
+        bucket,
+        tag,
+        'updated',
+        oldValue,
+        newValue,
+        projectId,
+      );
+    }
+  }
+
+  void clear(String bucket, {String? projectId}) {
+    if (_box.containsKey(bucket)) {
+      final bucketData = _box[bucket];
+      if (bucketData != null) {
+        for (final entry in bucketData.entries) {
+          _notifyBucketChange(
+            bucket,
+            entry.key,
+            'deleted',
+            entry.value.value,
+            null,
+            projectId,
+          );
+        }
+      }
+      _box.remove(bucket);
+      _createEvent('clear', bucket, null, null);
+    }
   }
 
   void dispose() {

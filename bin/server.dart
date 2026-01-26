@@ -12,6 +12,7 @@ import 'package:revani/tools/tokener.dart';
 import 'package:revani/config.dart';
 import 'package:dotenv/dotenv.dart';
 import 'package:uuid/uuid.dart';
+import 'package:mime/mime.dart';
 
 void main(List<String> args) async {
   try {
@@ -150,6 +151,99 @@ Future<Response> _handleRestRequests(
   try {
     final path = request.url.path;
 
+    if (request.method == 'GET' && (path == '' || path == '/')) {
+      const htmlContent = """
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Revani Server</title>
+          <style>
+              body {
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                  background-color: #f9fafb;
+                  color: #1f2937;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  height: 100vh;
+                  margin: 0;
+              }
+              .container {
+                  text-align: center;
+                  background: white;
+                  padding: 3rem;
+                  border-radius: 1rem;
+                  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+                  max-width: 400px;
+                  width: 90%;
+              }
+              h1 {
+                  font-size: 2.5rem;
+                  margin-bottom: 0.5rem;
+                  color: #d97706;
+              }
+              .tagline {
+                  font-size: 1.1rem;
+                  color: #4b5563;
+                  margin-bottom: 2rem;
+              }
+              .status {
+                  display: inline-flex;
+                  align-items: center;
+                  background-color: #d1fae5;
+                  color: #065f46;
+                  padding: 0.5rem 1rem;
+                  border-radius: 9999px;
+                  font-weight: 600;
+                  font-size: 0.875rem;
+              }
+              .dot {
+                  height: 8px;
+                  width: 8px;
+                  background-color: #059669;
+                  border-radius: 50%;
+                  margin-right: 0.5rem;
+              }
+              .footer {
+                  margin-top: 2rem;
+                  font-size: 0.75rem;
+                  color: #9ca3af;
+              }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>Revani 🍰</h1>
+              <p class="tagline">Developed for humanity by <strong>JeaFriday</strong></p>
+              <div class="status">
+                  <span class="dot"></span>
+                  All Systems Operational
+              </div>
+              <p class="footer">Serving delicious data since 2026</p>
+          </div>
+      </body>
+      </html>
+      """;
+      return Response.ok(
+        htmlContent,
+        headers: {'content-type': 'text/html; charset=utf-8'},
+      );
+    }
+
+    if (request.method == 'GET' && path == 'health') {
+      return Response.ok(
+        jsonEncode({
+          'status': 200,
+          'service': 'Revani',
+          'message': 'Developed for humanity by JeaFriday',
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+
     if (request.method == 'POST' && path == 'upload') {
       final accountID = request.headers['x-account-id'];
       final projectName = request.headers['x-project-name'];
@@ -185,14 +279,34 @@ Future<Response> _handleRestRequests(
         projectID,
         fileId,
       );
+
+      print('[*] Incoming Upload Request:');
+      print(' - Content-Length Header: ${request.contentLength}');
+      print(' - Content-Type: ${request.headers['content-type']}');
       final sink = fileHandle.openWrite();
 
       try {
-        await request.read().pipe(sink);
-      } catch (e) {
+        print('[*] Writing Stream to Disk...');
+        int totalBytes = 0;
+
+        await sink.addStream(
+          request.read().map((chunk) {
+            totalBytes += chunk.length;
+            return chunk;
+          }),
+        );
+
+        print('[+] Upload Finished. Total Bytes Written: $totalBytes');
+
+        await sink.flush();
+        await sink.close();
+      } catch (e, stackTrace) {
+        print('[!] Upload Error Details: $e');
+        print(stackTrace);
+
         await sink.close();
         if (await fileHandle.exists()) await fileHandle.delete();
-        return Response.internalServerError(body: 'Upload pipe broken');
+        return Response.internalServerError(body: 'Upload pipe broken: $e');
       }
 
       return Response.ok(
@@ -221,12 +335,16 @@ Future<Response> _handleRestRequests(
       if (!await file.exists()) {
         return Response.notFound('Empty jar');
       }
-
+      final headerBytes = await file.openRead(0, 12).first;
+      String? mimeType = lookupMimeType(file.path, headerBytes: headerBytes);
+      mimeType ??= 'application/octet-stream';
       return Response.ok(
         file.openRead(),
         headers: {
-          'content-type': 'application/octet-stream',
+          'content-type': mimeType,
+          'content-disposition': 'inline; filename="$fileId"',
           'content-length': (await file.length()).toString(),
+          'Access-Control-Allow-Origin': '*',
         },
       );
     }

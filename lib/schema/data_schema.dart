@@ -296,7 +296,7 @@ class DataSchemaData {
       "tag": tag,
       "value": encryptedValue,
       "id": entryId,
-    });
+    }, projectId: pId);
 
     db.setIndex(dataIndexTag, compositeKey, entryId);
 
@@ -517,7 +517,7 @@ class DataSchemaData {
       );
     }
 
-    db.remove(collectionTag, targetId);
+    db.remove(collectionTag, targetId, projectId: projectID);
     db.removeIndex(dataIndexTag, compositeKey);
 
     return DataResponse(message: "Deleted.", error: "", status: StatusCodes.ok);
@@ -607,7 +607,7 @@ class DataSchemaData {
     final updatedData = Map<String, dynamic>.from(item.value);
     updatedData['value'] = encryptedValue;
 
-    db.add(collectionTag, targetId, updatedData);
+    db.add(collectionTag, targetId, updatedData, projectId: projectID);
 
     return DataResponse(message: "Updated.", error: "", status: StatusCodes.ok);
   }
